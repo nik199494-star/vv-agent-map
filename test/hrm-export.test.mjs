@@ -29,7 +29,7 @@ test('FULL XLSX maps the deficit to legacy RAW and preserves the source row', ()
 });
 
 test('FULL XLSX rejects missing export metadata, duplicate request ID and inconsistent deficit', () => {
-  assert.throws(() => vvCheckPreviewFull_(grid, rawHeaders, now, 0, 36, ''), /нет времени формирования/);
+  assert.throws(() => vvCheckPreviewFull_(grid, rawHeaders, now, 0, 36, ''), /подтверждённую рабочую дату/);
   assert.throws(() => vvCheckPreviewFull_([nativeHeaders, source, source], rawHeaders, now, 0, 36, date), /повторный ID/);
   const broken = source.slice();
   broken[7] = 2;
@@ -45,4 +45,13 @@ test('preview retains linked RAW and compares its common business fields', () =>
   linked[3] = 7;
   assert.equal(vvPreviewRawMatches_(full, {raw: [rawHeaders, linked]}), false);
   assert.equal(vvProjectPreviewHrm_([rawHeaders, linked], rawHeaders).extended, false);
+});
+
+test('day-only HRM uses the confirmed Moscow date for both FULL and linked RAW', () => {
+  const accepted = vvCheckPreviewFull_(grid, rawHeaders, now, now - 3600000, 1, '2026-11-18');
+  assert.equal(accepted.sourceTime, Date.parse('2026-11-18T00:00:00+03:00'));
+  assert.equal(accepted.raw[1][13], '');
+  assert.equal(vvCheckPreviewFull_(accepted.raw, rawHeaders, now, 0, 1, '2026-11-18').deficit, 3);
+  assert.throws(() => vvCheckPreviewFull_(grid, rawHeaders, now, 0, 36, '2026-11-17'), /московским днём/);
+  assert.throws(() => vvCheckPreviewFull_(grid, rawHeaders, now, 0, 36, '2026-11-19'), /московским днём/);
 });

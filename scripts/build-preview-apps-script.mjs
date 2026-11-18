@@ -21,6 +21,7 @@ export function makePreviewCode(legacy, files, coordinates) {
   code = replaceRequired(code, "createMenu('ВВ Потребность')", "createMenu('ВВ Preview')");
   code = replaceRequired(code, ".addItem('Принять снимок и обновить карту','vvAcceptAndPublish')", ".addItem('Принять снимок и создать паспорт preview','vvAcceptAndPublish')");
   code = replaceRequired(code, ".addItem('Проверить публикацию','vvCheckMapStatus')", ".addItem('Связать испытательные копии','vvPreviewRebind')\n .addItem('Проверить ссылки и формулы v2','vvPreviewInspect')");
+  code = replaceRequired(code, "   control.getRange('B3').setValue(stamp);\n", '');
 
   let pipe = files.DemandPipeline.replace(/\r\n/g, '\n');
   pipe = pipe.replace(/^var VV_(HOME|GITHUB|KNOWLEDGE|AGENT) = .*;\n/gm, '');
@@ -32,10 +33,17 @@ export function makePreviewCode(legacy, files, coordinates) {
   pipe = replaceRequired(pipe, "    vvSetState_(book, properties, state, 'Проверка данных');",
     "    vvPreviewCheckBeforeRun_(book);\n    vvSetState_(book, properties, state, 'Проверка данных');");
   pipe = pipe.replaceAll('vvCheckRaw_(fullSheet.getDataRange()', 'vvCheckPreviewFull_(fullSheet.getDataRange()');
+  pipe = replaceRequired(pipe, 'vvCheckRaw_(staged.values, RAW_HEADERS, now, 0, hours, stamp)',
+    'vvCheckPreviewFull_(staged.values, RAW_HEADERS, now, 0, hours, stamp)');
   pipe = replaceRequired(pipe, 'canonical(full.raw) !== canonical(next.raw)', '!vvPreviewRawMatches_(full, next)');
+  const dictionaryWrite = '    vvWriteDictionary_(dictionary, diagnosis, journal, state.run);\n';
+  const criticalCheck = "    if (diagnosis.issues.some(function (issue) { return issue.state === VV_STATUS.critical; })) throw Error('Есть критические замечания в «Автодиагностике».');\n";
+  pipe = replaceRequired(pipe, dictionaryWrite + criticalCheck, criticalCheck + dictionaryWrite);
   pipe = replaceRequired(pipe, '  var book = SpreadsheetApp.getActiveSpreadsheet();\n  var lock = LockService.getDocumentLock();',
     '  var book = SpreadsheetApp.getActiveSpreadsheet();\n  vvPreviewAssert_(book);\n  var lock = LockService.getDocumentLock();');
   pipe = replaceRequired(pipe, "JSON.parse(vvPublic_('coordinates.json'))", 'VV_PREVIEW_COORDINATES');
+  pipe = replaceRequired(pipe, '    var views = vvViews_(expected, date);',
+    "    vvSheet_(book, 'Контроль').getRange('B3').setValue(new Date(full.sourceTime)).setNumberFormat('dd.MM.yyyy');\n    SpreadsheetApp.flush();\n    var views = vvViews_(expected, date);");
   pipe = replaceRequired(pipe, "properties.getProperty('VV_DEPLOY_MODE') !== 'deploy'", 'true');
   const previousStart = pipe.indexOf('    if (previous.done && previous.snapshot === state.snapshot');
   const passportStart = pipe.indexOf('    var passport = JSON.stringify(', previousStart);

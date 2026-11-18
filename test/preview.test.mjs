@@ -91,13 +91,34 @@ test('compiled preview blocks installation hooks on a production workbook and ha
     [name, await readFile(new URL('../automation/' + name + '.gs', import.meta.url), 'utf8')])));
   const legacy = "/** @OnlyCurrentDoc */\nfunction onOpen(){SpreadsheetApp.getUi().createMenu('ВВ Потребность').addItem('Принять RAW и сохранить снимок','refreshDemand').addToUi();}\n" +
     "function onEdit(e){writes++;}\nfunction refreshDemand(){\n var lock=LockService.getDocumentLock();if(!lock.tryLock(1000))return;\n" +
-    " try{writes++;}catch(err){throw err;}finally{lock.releaseLock();}\n}\n" +
+    " try{writes++;\n   control.getRange('B3').setValue(stamp);\n }catch(err){throw err;}finally{lock.releaseLock();}\n}\n" +
     "function pointOf(id,tag){return [id,tag];}\nfunction normalize(dict,p,r){return [dict.find(d=>clean(d[0])===p[0]&&p[0]),dict.find(d=>clean(d[0])===r[3])];}\n";
   const compiled = makePreviewCode(legacy, files, {});
   assert.doesNotMatch(compiled, /UrlFetchApp|workflow_dispatch|VV_GITHUB_ACTIONS_TOKEN/);
   assert.match(compiled, /vvCheckPreviewFull_\(fullSheet\.getDataRange\(\)/);
-  const book = {getId: () => [...productionBooks][0]};
-  const context = {SpreadsheetApp: {getActiveSpreadsheet: () => book}, PropertiesService: {getScriptProperties: () => ({getProperty: () => ''})}, writes: 0};
-  runInNewContext(compiled + '\nonOpen();onEdit({source: SpreadsheetApp.getActiveSpreadsheet()});refreshDemand();', context);
+  const original = 'original_workbook_id_for_automated_test';
+  const props = {
+    VV_PREVIEW_ORIGINAL_WORK_ID: original,
+    VV_PREVIEW_WORK_ID: 'staging_work_workbook_id_for_unit_test',
+    VV_PREVIEW_KB_ID: 'staging_knowledge_workbook_id_for_unit_test',
+    VV_PREVIEW_AGENT_ID: previewId
+  };
+  let active;
+  const book = id => ({getId: () => id});
+  const context = {SpreadsheetApp: {getActiveSpreadsheet: () => book(active)},
+    PropertiesService: {getScriptProperties: () => ({getProperty: key => props[key]})}, writes: 0, digest: sha256, original};
+  runInNewContext(compiled + '\nvvHash_ = digest; VV_PREVIEW_WORK_HASH = vvHash_(original);', context);
+  assert.equal(context.vvPreviewAllowed_(book(props.VV_PREVIEW_WORK_ID)), true);
+  for (const id of [...productionBooks, original, props.VV_PREVIEW_KB_ID, props.VV_PREVIEW_AGENT_ID]) {
+    active = id;
+    context.onOpen();
+    context.onEdit({source: book(active)});
+    context.refreshDemand();
+    assert.throws(() => context.vvAcceptAndPublish(), /только в зарегистрированной рабочей копии/);
+    assert.throws(() => context.vvPreviewRebind(), /только в зарегистрированной рабочей копии/);
+    assert.throws(() => context.vvRollbackDictionary(), /только в зарегистрированной рабочей копии/);
+  }
+  props.VV_PREVIEW_KB_ID = [...productionBooks][0];
+  assert.equal(context.vvPreviewAllowed_(book(props.VV_PREVIEW_WORK_ID)), false);
   assert.equal(context.writes, 0);
 });

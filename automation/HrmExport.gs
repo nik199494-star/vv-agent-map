@@ -34,9 +34,21 @@ function vvProjectPreviewHrm_(grid, rawHeaders) {
 function vvCheckPreviewFull_(grid, rawHeaders, now, previousUpdated, hours, exportStamp) {
   var input = vvProjectPreviewHrm_(grid, rawHeaders);
   if (input.extended && !exportStamp) {
-    throw Error('В XLSX HRM нет времени формирования. Укажите подтверждённую HRM отметку в VV_FULL_TIMESTAMP_CELL.');
+    throw Error('Укажите подтверждённую рабочую дату HRM в ячейке VV_FULL_TIMESTAMP_CELL.');
   }
-  var checked = vvCheckRaw_(input.grid, rawHeaders, now, previousUpdated, hours, exportStamp);
+  var date = vvText_(exportStamp);
+  var checked;
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(date)) {
+    var dayStart = Date.parse(date + 'T00:00:00+03:00');
+    if (date !== new Date(now + 3 * 3600000).toISOString().slice(0, 10) ||
+        previousUpdated >= dayStart + 24 * 3600000) {
+      throw Error('Подтверждённая дата FULL должна совпадать с текущим московским днём и не предшествовать последнему снимку.');
+    }
+    checked = vvCheckRaw_(input.grid, rawHeaders, now, 0, hours, new Date(now));
+    checked.sourceTime = dayStart;
+  } else {
+    checked = vvCheckRaw_(input.grid, rawHeaders, now, previousUpdated, hours, exportStamp);
+  }
   checked.extended = input.extended;
   return checked;
 }
