@@ -121,7 +121,16 @@
   "1343": {
     "city": "Москва",
     "address": "Москва, Лихоборские, д. 6",
-    "reason": "different"
+    "xy": [
+      55.84243,
+      37.54825
+    ],
+    "sources": [
+      "https://vkusvill.ru/shops/?shop_id=2988",
+      "https://yandex.com/maps/213/moscow/house/ulitsa_likhoborskiye_bugry_6/Z04YcwNoS0APQFtvfXR1c3hgZw%3D%3D/inside/"
+    ],
+    "checkedOn": "2026-11-18",
+    "evidence": "Тот же ID, Москва и дом 6. Официальная карточка и каталог адресов подтверждают полное название улицы Лихоборские Бугры."
   },
   "1371": {
     "city": "Владимир",
@@ -2011,7 +2020,16 @@
   "6135": {
     "city": "Челябинск",
     "address": "Челябинск, ул. Героя России Родионова, д. 17",
-    "reason": "different"
+    "xy": [
+      55.16897,
+      61.28053
+    ],
+    "sources": [
+      "https://vkusvill.ru/shops/cek/?shop_id=606289",
+      "https://t.me/s/news_vkusvill?before=593"
+    ],
+    "checkedOn": "2026-11-18",
+    "evidence": "Тот же ID, город и дом 17. Каталог и сообщение ВкусВилла подтверждают полное название проспекта."
   },
   "6280": {
     "city": "Сочи",
@@ -2345,7 +2363,16 @@
   "7087": {
     "city": "Боброво",
     "address": "Боброво стр № 239",
-    "reason": "different"
+    "xy": [
+      55.54048,
+      37.6119
+    ],
+    "sources": [
+      "https://vkusvill.ru/shops/?shop_id=2005953",
+      "https://totadres.ru/moskovskaya_oblast/address/120114/bobrovo/239"
+    ],
+    "checkedOn": "2026-11-18",
+    "evidence": "Тот же ID и объект 239 в каталоге. ТЦ Боброво и карточка ВкусВилла подтверждают тот же дом."
   },
   "7137": {
     "city": "Москва",
@@ -2957,7 +2984,16 @@
   "8096": {
     "city": "Люберцы",
     "address": "Люберцы Некрасовский (Зенино ЖК Самолёт мкр.), проезд, уч. 4А",
-    "reason": "incomplete"
+    "xy": [
+      55.70837,
+      37.94872
+    ],
+    "sources": [
+      "https://vkusvill.ru/shops/?shop_id=5668586",
+      "https://finder.work/vacancies/34927476"
+    ],
+    "checkedOn": "2026-11-18",
+    "evidence": "Тот же ID и адрес объекта 4А. Вакансия ВкусВилла подтверждает Некрасовский проезд в ЖК Самолёт."
   },
   "8110": {
     "city": "Москва",

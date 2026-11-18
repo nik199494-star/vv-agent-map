@@ -1,0 +1,8 @@
+{
+  "name": "vv-agent-map",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "build": "node build.mjs", "publish-demand": "node scripts/publish-demand.mjs", "test": "node --test" }
+}

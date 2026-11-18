@@ -16,6 +16,8 @@ export function isOutdated(sourceDate, now = new Date()) {
 
 export function assertFreshEnough(next, previous) {
   if (!previous) return;
+  if (next.rollbackOf && previous.snapshotId === next.rollbackOf &&
+      Date.parse(next.publishedAt) >= Date.parse(previous.publishedAt)) return;
   const source = dateKey(next.sourceDate).localeCompare(dateKey(previous.sourceDate));
   if (source < 0 || (source === 0 && Date.parse(next.publishedAt) < Date.parse(previous.publishedAt))) {
     throw new RangeError('Получена более ранняя версия потребности.');
