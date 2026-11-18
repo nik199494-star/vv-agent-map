@@ -1,0 +1,60 @@
+name: Изолированный preview потребности
+
+on:
+  push:
+    branches: ['codex/demand-pipeline']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vv-demand-branch-preview
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    outputs:
+      mode: ${{ steps.request.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test
+      - id: request
+        name: Определить режим preview
+        run: |
+          node --input-type=module -e "import {parseRequest} from './scripts/preview.mjs'; import {readFileSync,appendFileSync} from 'node:fs'; const {mode}=parseRequest(JSON.parse(readFileSync('.github/preview-request.json','utf8'))); appendFileSync(process.env.GITHUB_OUTPUT,'mode='+mode+'\n');"
+      - name: Проверить опубликованный исторический снимок
+        if: steps.request.outputs.mode == 'fixture'
+        run: node scripts/preview.mjs
+      - name: Сохранить исторический preview
+        if: steps.request.outputs.mode == 'fixture'
+        uses: actions/upload-artifact@v4
+        with:
+          name: demand-preview-fixture
+          path: .data/preview-site/
+          retention-days: 3
+
+  sheets:
+    if: needs.verify.outputs.mode == 'sheets' && github.ref == 'refs/heads/codex/demand-pipeline'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    environment: demand-preview
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Сверить испытательную книгу с паспортом
+        env:
+          VV_PREVIEW_AGENT_ID: ${{ secrets.VV_PREVIEW_AGENT_ID }}
+          VV_PREVIEW_SHEETS_READER: ${{ secrets.VV_PREVIEW_SHEETS_READER }}
+        run: node scripts/preview.mjs

@@ -107,7 +107,7 @@ async function request(url, options = {}, fetcher = fetch) {
   return fetcher(url, {redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(25_000), ...options});
 }
 
-async function accessToken(key, fetcher = fetch) {
+export async function accessToken(key, fetcher = fetch) {
   if (!key?.client_email || !key.private_key) throw Error('Отсутствует ключ читателя агентской книги.');
   const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
   const iat = Math.floor(Date.now() / 1000);
@@ -122,17 +122,22 @@ async function accessToken(key, fetcher = fetch) {
   return (await result.json()).access_token;
 }
 
-export async function readAgentViews(token, fetcher = fetch) {
+export const agentRanges = ["'Потребность точки'!A:P", "'Потребность города'!A:M"];
+
+export async function readSheetValues(workbook, ranges, token, fetcher = fetch) {
+  if (!/^[A-Za-z0-9_-]{30,100}$/u.test(workbook)) throw Error('Некорректный идентификатор агентской книги.');
   const params = new URLSearchParams({valueRenderOption: 'FORMATTED_VALUE'});
-  for (const range of ["'Потребность точки'!A:P", "'Потребность города'!A:M"]) params.append('ranges', range);
-  const url = 'https://sheets.googleapis.com/v4/spreadsheets/' + agentWorkbook + '/values:batchGet?' + params;
+  for (const range of ranges) params.append('ranges', range);
+  const url = 'https://sheets.googleapis.com/v4/spreadsheets/' + workbook + '/values:batchGet?' + params;
   const result = await request(url, {headers: {authorization: 'Bearer ' + token}}, fetcher);
   if (!result.ok) throw Error('Агентская книга вернула HTTP ' + result.status + '.');
   const {valueRanges} = await result.json();
-  if (valueRanges?.length !== 2 || valueRanges.some(range => !Array.isArray(range.values))) throw Error('В Google Sheets отсутствует одна из витрин.');
+  if (valueRanges?.length !== ranges.length || valueRanges.some(range => !Array.isArray(range.values))) throw Error('В Google Sheets отсутствует одна из запрошенных витрин.');
   if (valueRanges.some(range => range.values.length >= 5000)) throw Error('Для размера витрины нужна настройка диапазона чтения.');
   return valueRanges.map(range => range.values);
 }
+
+export const readAgentViews = (token, fetcher = fetch) => readSheetValues(agentWorkbook, agentRanges, token, fetcher);
 
 const assetPath = (directory, name) => new URL(name, new URL('../' + directory + '/', import.meta.url));
 const file = async (directory, name) => JSON.parse(await readFile(assetPath(directory, name), 'utf8'));
