@@ -36,6 +36,14 @@ export function readPassport(grid, requestId) {
   catch { throw Error('Некорректный паспорт испытательного снимка.'); }
 }
 
+export function assertPreviewFreshness(passport, now) {
+  const requestedAt = Date.parse(passport?.requestedAt);
+  const age = now.getTime() - requestedAt;
+  if (!Number.isFinite(age) || age < -5 * 60_000 || age > 6 * 3_600_000) {
+    throw Error('Запрос preview просрочен или содержит неверное время. Создайте новый паспорт.');
+  }
+}
+
 export function fixtureViews(snapshot) {
   const rows = [];
   const cities = new Map();
@@ -63,7 +71,7 @@ export function assembleFixture(baseline, coordinates) {
   return assemble(passport, points, cities, coordinates, baseline, null);
 }
 
-export async function runPreview(request, env = process.env, fetcher = fetch, log = console.log) {
+export async function runPreview(request, env = process.env, fetcher = fetch, log = console.log, now = new Date()) {
   const input = parseRequest(request);
   if (env.GITHUB_ACTIONS && (env.GITHUB_REF !== 'refs/heads/codex/demand-pipeline' || env.GITHUB_EVENT_NAME !== 'push')) {
     throw Error('Preview разрешён только при push в ветку codex/demand-pipeline.');
@@ -80,6 +88,7 @@ export async function runPreview(request, env = process.env, fetcher = fetch, lo
     if (!token) throw Error('Google OAuth не вернул токен читателя.');
     const [points, cities, passportGrid] = await readSheetValues(workbook, passportRanges, token, fetcher);
     const passport = readPassport(passportGrid, input.requestId);
+    assertPreviewFreshness(passport, now);
     assemble(passport, points, cities, coordinates, {...baseline, sourceDate: passport.sourceDate}, null);
     log('Испытательная витрина, маркер и результаты расчёта совпали.');
     return;

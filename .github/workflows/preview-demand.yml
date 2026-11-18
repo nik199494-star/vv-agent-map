@@ -50,9 +50,12 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Блокировать повторный запрос
+        run: node scripts/check-preview-push.mjs
       - name: Сверить испытательную книгу с паспортом
         env:
           VV_PREVIEW_AGENT_ID: ${{ secrets.VV_PREVIEW_AGENT_ID }}

@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import test from 'node:test';
 import {runInNewContext} from 'node:vm';
 import {makePreviewCode} from '../scripts/build-preview-apps-script.mjs';
+import {verifyPreviewPush} from '../scripts/check-preview-push.mjs';
 import {assembleFixture, assertPreviewId, fixtureViews, parseRequest, productionBooks, runPreview} from '../scripts/preview.mjs';
 import {project, sha256} from '../scripts/projection.mjs';
 import {metrics} from '../scripts/release.mjs';
@@ -44,6 +45,8 @@ test('staging integrates OAuth, the two Sheet views and sealed passport without 
   const env = {...branch, VV_PREVIEW_AGENT_ID: previewId,
     VV_PREVIEW_SHEETS_READER: JSON.stringify({client_email: 'test@example.invalid', private_key: privateKey})};
   let publishedMarker = marker;
+  let publishedPassport = passport;
+  let sheetsStatus = 200;
   const calls = [];
   const fetcher = async (url, options) => {
     const endpoint = new URL(url);
@@ -53,19 +56,38 @@ test('staging integrates OAuth, the two Sheet views and sealed passport without 
     assert.match(endpoint.pathname, new RegExp(previewId));
     assert.equal(options.headers.authorization, 'Bearer fake-test-token');
     assert.ok(endpoint.searchParams.getAll('ranges').includes("'Паспорт preview'!A1:B2"));
-    const values = [points, cities, [['Маркер', 'Паспорт'], [publishedMarker, JSON.stringify(passport)]]];
+    if (sheetsStatus !== 200) return new Response('private error body', {status: sheetsStatus});
+    const values = [points, cities, [['Маркер', 'Паспорт'], [publishedMarker, JSON.stringify(publishedPassport)]]];
     return Response.json({valueRanges: values.map(values => ({values}))});
   };
   const logs = [];
-  await runPreview(sheets, env, fetcher, value => logs.push(value));
+  const now = new Date(passport.requestedAt);
+  const failLog = () => assert.fail('Unexpected log');
+  await runPreview(sheets, env, fetcher, value => logs.push(value), now);
   assert.deepEqual(calls, ['oauth2.googleapis.com', 'sheets.googleapis.com']);
   assert.deepEqual(logs, ['Испытательная витрина, маркер и результаты расчёта совпали.']);
   publishedMarker = 'stale';
-  await assert.rejects(runPreview(sheets, env, fetcher, () => assert.fail('Unexpected log')), /расходится с паспортом/);
+  await assert.rejects(runPreview(sheets, env, fetcher, failLog, now), /расходится с паспортом/);
+  publishedMarker = marker;
+  publishedPassport = {...passport, sourceDate: 'не дата'};
+  await assert.rejects(runPreview(sheets, env, fetcher, failLog, now), /Некорректный паспорт/);
+  publishedPassport = {...passport, metrics: {...passport.metrics, points: passport.metrics.points + 1}};
+  await assert.rejects(runPreview(sheets, env, fetcher, failLog, now), /не совпали/);
+  publishedPassport = passport;
+  await assert.rejects(runPreview(sheets, env, fetcher, failLog, new Date(+now + 7 * 3_600_000)), /просрочен/);
+  sheetsStatus = 503;
+  await assert.rejects(runPreview(sheets, env, fetcher, failLog, now), /HTTP 503/);
+});
+
+test('GitHub preview refuses reruns, unchanged requests and reused markers', () => {
+  verifyPreviewPush(marker, [['new', marker], ['old', 'previous']], 'new', '1');
+  assert.throws(() => verifyPreviewPush(marker, [['new', marker]], 'new', '2'), /повторный/);
+  assert.throws(() => verifyPreviewPush(marker, [['old', marker]], 'new', '1'), /повторный/);
+  assert.throws(() => verifyPreviewPush(marker, [['new', marker], ['old', marker]], 'new', '1'), /повторный/);
 });
 
 test('compiled preview blocks installation hooks on a production workbook and has no deployment call', async () => {
-  const files = Object.fromEntries(await Promise.all(['Projection','Diagnostics','Geocontrol','DemandPipeline','Preview'].map(async name =>
+  const files = Object.fromEntries(await Promise.all(['Projection','Diagnostics','HrmExport','Geocontrol','DemandPipeline','Preview'].map(async name =>
     [name, await readFile(new URL('../automation/' + name + '.gs', import.meta.url), 'utf8')])));
   const legacy = "/** @OnlyCurrentDoc */\nfunction onOpen(){SpreadsheetApp.getUi().createMenu('ВВ Потребность').addItem('Принять RAW и сохранить снимок','refreshDemand').addToUi();}\n" +
     "function onEdit(e){writes++;}\nfunction refreshDemand(){\n var lock=LockService.getDocumentLock();if(!lock.tryLock(1000))return;\n" +
@@ -73,6 +95,7 @@ test('compiled preview blocks installation hooks on a production workbook and ha
     "function pointOf(id,tag){return [id,tag];}\nfunction normalize(dict,p,r){return [dict.find(d=>clean(d[0])===p[0]&&p[0]),dict.find(d=>clean(d[0])===r[3])];}\n";
   const compiled = makePreviewCode(legacy, files, {});
   assert.doesNotMatch(compiled, /UrlFetchApp|workflow_dispatch|VV_GITHUB_ACTIONS_TOKEN/);
+  assert.match(compiled, /vvCheckPreviewFull_\(fullSheet\.getDataRange\(\)/);
   const book = {getId: () => [...productionBooks][0]};
   const context = {SpreadsheetApp: {getActiveSpreadsheet: () => book}, PropertiesService: {getScriptProperties: () => ({getProperty: () => ''})}, writes: 0};
   runInNewContext(compiled + '\nonOpen();onEdit({source: SpreadsheetApp.getActiveSpreadsheet()});refreshDemand();', context);

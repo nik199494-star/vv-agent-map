@@ -31,12 +31,16 @@ export function makePreviewCode(legacy, files, coordinates) {
     '  var ids = vvPreviewConfig_();\n  var knowledge = SpreadsheetApp.openById(ids[1]);\n  var agent = SpreadsheetApp.openById(ids[2]);');
   pipe = replaceRequired(pipe, "    vvSetState_(book, properties, state, 'Проверка данных');",
     "    vvPreviewCheckBeforeRun_(book);\n    vvSetState_(book, properties, state, 'Проверка данных');");
+  pipe = pipe.replaceAll('vvCheckRaw_(fullSheet.getDataRange()', 'vvCheckPreviewFull_(fullSheet.getDataRange()');
+  pipe = replaceRequired(pipe, 'canonical(full.raw) !== canonical(next.raw)', '!vvPreviewRawMatches_(full, next)');
   pipe = replaceRequired(pipe, '  var book = SpreadsheetApp.getActiveSpreadsheet();\n  var lock = LockService.getDocumentLock();',
     '  var book = SpreadsheetApp.getActiveSpreadsheet();\n  vvPreviewAssert_(book);\n  var lock = LockService.getDocumentLock();');
   pipe = replaceRequired(pipe, "JSON.parse(vvPublic_('coordinates.json'))", 'VV_PREVIEW_COORDINATES');
   pipe = replaceRequired(pipe, "properties.getProperty('VV_DEPLOY_MODE') !== 'deploy'", 'true');
-  pipe = replaceRequired(pipe, "(previous.status === 'Карта обновлена' || previous.status === 'Проверка GitHub Actions завершена')",
-    "previous.status === 'Паспорт preview готов'");
+  const previousStart = pipe.indexOf('    if (previous.done && previous.snapshot === state.snapshot');
+  const passportStart = pipe.indexOf('    var passport = JSON.stringify(', previousStart);
+  if (previousStart < 0 || passportStart < 0) throw Error('Не найдена проверка повторного выпуска.');
+  pipe = pipe.slice(0, previousStart) + pipe.slice(passportStart);
   const dispatchStart = pipe.indexOf('    if (passport.length > 60000)');
   const dispatchEnd = pipe.indexOf('    vvScheduleStatus_();', dispatchStart);
   if (dispatchStart < 0 || dispatchEnd < 0) throw Error('Не найден блок отправки выпуска.');
@@ -52,7 +56,7 @@ export function makePreviewCode(legacy, files, coordinates) {
   const options = 'var VV_PREVIEW_PUBLIC_ORIGINALS = ' + JSON.stringify([...productionBooks]) + ';\n' +
     'var VV_PREVIEW_WORK_HASH = ' + JSON.stringify(workingBookIdHash) + ';\n' +
     'var VV_PREVIEW_COORDINATES = ' + JSON.stringify(coordinates) + ';\n';
-  const result = [code, files.Projection, files.Diagnostics, geo, pipe, options, files.Preview].join('\n\n');
+  const result = [code, files.Projection, files.Diagnostics, files.HrmExport, geo, pipe, options, files.Preview].join('\n\n');
   if (/actions\/workflows\/|UrlFetchApp|ScriptApp\.newTrigger|VV_GITHUB_ACTIONS_TOKEN|VV_DEPLOY_MODE/u.test(result)) {
     throw Error('Испытательный Код.gs содержит сетевые или публикационные вызовы.');
   }
@@ -65,7 +69,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     const [, , source, directory = '.data/preview-install'] = process.argv;
     if (!source) throw Error('Укажите путь к закрытой выгрузке действующего Код.gs.');
     const legacy = await readFile(resolve(source), 'utf8');
-    const names = ['Projection', 'Diagnostics', 'Geocontrol', 'DemandPipeline', 'Preview'];
+    const names = ['Projection', 'Diagnostics', 'HrmExport', 'Geocontrol', 'DemandPipeline', 'Preview'];
     const files = Object.fromEntries(await Promise.all(names.map(async name =>
       [name, await readFile(new URL('../automation/' + name + '.gs', import.meta.url), 'utf8')])));
     const coordinates = JSON.parse(await readFile(new URL('../coordinates.json', import.meta.url), 'utf8'));
