@@ -1,0 +1,97 @@
+name: Снимок потребности и GitHub Pages
+
+on:
+  push:
+    branches:
+      - 'codex/**'
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      handoff:
+        description: Паспорт согласованного снимка из Apps Script
+        required: true
+        type: string
+      mode:
+        description: Проверить или опубликовать
+        required: true
+        type: choice
+        options: [preview, deploy]
+        default: preview
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test
+      - run: node build.mjs
+
+  release:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: vv-demand-pages
+      cancel-in-progress: false
+    environment: github-pages
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Проверить паспорт и собрать выпуск
+        id: plan
+        env:
+          VV_AGENT_READER: ${{ secrets.VV_AGENT_READER }}
+        run: node scripts/release.mjs plan
+      - name: Настроить GitHub Pages
+        if: inputs.mode == 'deploy' && steps.plan.outputs.changed == 'true'
+        uses: actions/configure-pages@v5
+      - name: Сохранить предыдущий выпуск
+        if: inputs.mode == 'deploy' && steps.plan.outputs.changed == 'true'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: .data/previous
+          name: pages-previous
+          retention-days: 7
+      - name: Подготовить новый выпуск
+        if: inputs.mode == 'deploy' && steps.plan.outputs.changed == 'true'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: .data/next
+          name: pages-next
+      - name: Опубликовать выпуск
+        id: deploy
+        if: inputs.mode == 'deploy' && steps.plan.outputs.changed == 'true'
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: pages-next
+      - name: Подтвердить публичную версию
+        id: verify
+        if: inputs.mode == 'deploy'
+        run: node scripts/release.mjs verify
+      - name: Восстановить прежний выпуск при сбое проверки
+        id: rollback
+        if: failure() && steps.deploy.outcome == 'success' && steps.verify.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: pages-previous
+      - name: Проверить восстановление
+        if: failure() && steps.rollback.outcome == 'success'
+        run: node scripts/release.mjs verify-rollback
