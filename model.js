@@ -26,7 +26,7 @@ export function findPoints(points, filters) {
   const conditionTerms = normalize(filters.conditions).split(' ').filter(Boolean);
   const byRole = (role) => {
     const {transport, priority, superFocus, need, schedule, format, minor, shift, age, incomeFrom, incomeTo} = filters;
-    const acceptsMinor = role.age?.min >= 14 && role.age.min < 18;
+    const acceptsMinor = role.nsv === true && (!role.age || role.age.min < 18 && (role.age.max === null || role.age.max >= 14));
     return (!transport.length || transport.includes(role.transport))
       && (!priority || role.priority === priority)
       && (need === null || role.need >= need)

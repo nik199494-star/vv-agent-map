@@ -344,7 +344,7 @@ function renderDetail() {
     <div class="detail-role"><h3>${html(role.title)}</h3>${rolePriority(role)}${role.superFocus ? focusBadge : ''}</div>
     <dl class="detail-grid">
       ${formatMetric('Недобор', `${number(role.need)} чел.`)}${formatMetric('Кандидатов в работе', role.inProgress === null ? UNKNOWN : number(role.inProgress))}
-      ${formatMetric('Покрытие воронкой', role.coverage || UNKNOWN)}${formatMetric('НСВ', role.nsv === null ? UNKNOWN : role.nsv ? 'Да' : 'Нет')}
+      ${formatMetric('Покрытие воронкой', role.coverage || UNKNOWN)}${formatMetric('Принимает несовершеннолетних', role.nsv === null ? UNKNOWN : role.nsv ? 'Да' : 'Нет')}
       ${formatMetric('Ориентир дохода', incomeText(role.income))}${formatMetric('Средний доход за заказ', cleanUnits(role.perOrder, ' ₽'))}
       ${formatMetric('Пробег', cleanUnits(role.distance, ' км/день'))}${formatMetric('Возраст', ageText(role.age))}
       ${formatMetric('Минимальная смена', role.shift === null ? UNKNOWN : `${number(role.shift)} ч.`)}
