@@ -2,10 +2,11 @@ import {copyFile, mkdir} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 
 export const assets = [
-  '.nojekyll', 'index.html', 'app.js', 'cache.js', 'locations.js', 'lookup.js', 'model.js',
-  'nearby.js', 'source.js', 'styles.css', 'favicon.svg', 'ru-city-centers.json',
+  '.nojekyll', 'index.html', 'app.js', 'cache.js', 'release-cache.js', 'locations.js', 'lookup.js', 'model.js',
+  'nearby.js', 'source.js', 'rollback.js', 'styles.css', 'favicon.svg', 'ru-city-centers.json',
   'leaflet.js', 'leaflet.css', 'MarkerCluster.css', 'leaflet.markercluster.js',
   'leaflet.LICENSE.txt', 'leaflet.markercluster.LICENSE.txt', 'demand.json', 'coordinates.json',
+  'publication.json', 'rollback.json',
 ];
 
 export async function build(directory = new URL('./dist/', import.meta.url)) {
