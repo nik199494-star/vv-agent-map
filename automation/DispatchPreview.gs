@@ -1,6 +1,7 @@
 var VV_DISPATCH_STATE = 'VV_MAIN_PREVIEW_STATE';
 var VV_DISPATCH_WORKFLOW = 'actions/workflows/publish-demand.yml';
 var VV_DISPATCH_ENDPOINT = 'https://api.github.com/repos/nik199494-star/vv-agent-map/';
+var VV_DISPATCH_EXTERNAL_SCOPE = 'https://www.googleapis.com/auth/script.external_request';
 var VV_DISPATCH_MAX_AGE = 6 * 3600000;
 var VV_DISPATCH_CLOCK_SKEW = 5 * 60000;
 
@@ -10,22 +11,64 @@ function vvAddDispatchPreviewMenu_(menu) {
     .addItem('Проверить результат GitHub', 'vvConfirmDispatchPreview');
 }
 
-function vvDispatchPreviewRequest_(properties, path, body) {
-  var token = properties.getProperty('VV_PREVIEW_DISPATCH_TOKEN');
-  if (!token) throw Error('Укажите VV_PREVIEW_DISPATCH_TOKEN в свойствах испытательного проекта.');
+function vvDispatchFetchError_(cause, operation) {
+  // Исключение UrlFetchApp может содержать URL или заголовок. Наружу выходят только фиксированные сообщения.
+  var detail = String(cause && cause.message || '');
+  var code = 'VV_FETCH_UNKNOWN';
+  var hint = 'UrlFetchApp завершился до получения HTTP-ответа. Проверьте подключение и повторите проверку связи.';
+  if (/not permitted by your admin|not allowed by your admin|allowlist|whitelist|запрещ[её]н[оа]? администратором/i.test(detail)) {
+    code = 'VV_FETCH_POLICY';
+    hint = 'Политика Google запрещает запрос к api.github.com. Попросите администратора Google Workspace проверить разрешённые внешние URL.';
+  } else if (/script\.external_request|required permissions|you do not have permission to call|authorization is required|invalid scope|oauth scope|необходима авторизация|недостаточно разрешений/i.test(detail)) {
+    code = 'VV_FETCH_OAUTH';
+    hint = 'Google не подтвердил разрешение script.external_request. Проверьте OAuth-область и подтвердите внешний доступ для испытательного проекта.';
+  } else if (/invalid (?:http )?header|(?:header|authorization).*(?:line break|invalid|illegal|not allowed)|(?:invalid argument|illegal character).*(?:header|authorization)/i.test(detail)) {
+    code = 'VV_FETCH_HEADER';
+    hint = 'Google отклонил HTTP-заголовок. Проверьте, что VV_PREVIEW_DISPATCH_TOKEN содержит только fine-grained PAT.';
+  } else if (/invalid argument|invalid url|malformed url|unsupported protocol|недопустимый (?:аргумент|url)/i.test(detail)) {
+    code = 'VV_FETCH_ARGUMENT';
+    hint = 'Google отклонил URL или параметры запроса. Проверьте, что установлена актуальная версия DispatchPreview.gs.';
+  } else if (/quota|invoked too many times|service using too much computer time|превышен[ао]? квот/i.test(detail)) {
+    code = 'VV_FETCH_QUOTA';
+    hint = 'Google ограничил вызовы UrlFetchApp. Повторите проверку после восстановления квоты.';
+  } else if (/timeout|timed out|deadline exceeded|тайм-аут|время ожидания/i.test(detail)) {
+    code = 'VV_FETCH_TIMEOUT';
+    hint = 'Google не дождался ответа от GitHub. Повторите проверку связи позже.';
+  } else if (/dns|address unavailable|could not resolve|connection|socket|ssl|tls|certificate|network|соединен|сертификат/i.test(detail)) {
+    code = 'VV_FETCH_NETWORK';
+    hint = 'Google не смог установить соединение с api.github.com. Проверьте доступность GitHub и повторите проверку связи.';
+  }
+  return Error('[' + code + '] GitHub Actions (' + operation + '). ' + hint);
+}
+
+function vvDispatchPreviewRequest_(properties, path, operation, body) {
+  var token = (properties.getProperty('VV_PREVIEW_DISPATCH_TOKEN') || '').trim();
+  if (!token) throw Error('[VV_FETCH_TOKEN] Укажите VV_PREVIEW_DISPATCH_TOKEN в свойствах испытательного проекта.');
+  if (!/^github_pat_[A-Za-z0-9_-]+$/.test(token)) {
+    throw Error('[VV_FETCH_TOKEN] В VV_PREVIEW_DISPATCH_TOKEN нужен fine-grained PAT без кавычек, префикса Bearer и переносов внутри значения.');
+  }
   var options = {
     headers: {Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10'},
+    method: body ? 'post' : 'get',
+    // Параметры URL кодируются при построении запроса.
+    escaping: false,
     followRedirects: false,
     muteHttpExceptions: true
   };
   if (body) {
-    options.method = 'post';
     options.contentType = 'application/json';
     options.payload = JSON.stringify(body);
   }
   var result;
-  try { result = UrlFetchApp.fetch(VV_DISPATCH_ENDPOINT + path, options); }
-  catch (_) { throw Error('GitHub Actions недоступен или не ответил вовремя.'); }
+  try {
+    var authorization = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL, [VV_DISPATCH_EXTERNAL_SCOPE]);
+    if (authorization.getAuthorizationStatus() === ScriptApp.AuthorizationStatus.REQUIRED) {
+      throw Error('script.external_request');
+    }
+    result = UrlFetchApp.fetch(VV_DISPATCH_ENDPOINT + path, options);
+  } catch (cause) {
+    throw vvDispatchFetchError_(cause, operation);
+  }
   var status = result.getResponseCode();
   if (body && status === 204) return {};
   if (status !== 200) {
@@ -36,12 +79,22 @@ function vvDispatchPreviewRequest_(properties, path, body) {
       422: ' Проверьте параметры workflow и при необходимости создайте новый паспорт.',
       429: ' Лимит запросов исчерпан. Повторите проверку позже.'
     };
-    var error = Error('GitHub Actions вернул HTTP ' + status + '.' + (hints[status] || ''));
+    var error = Error('GitHub Actions вернул HTTP ' + status + ' (' + operation + ').' + (hints[status] || ''));
     error.httpStatus = status;
     throw error;
   }
   try { return JSON.parse(result.getContentText()); }
-  catch (_) { throw Error('GitHub Actions вернул некорректный ответ.'); }
+  catch (_) { throw Error('GitHub Actions вернул некорректный JSON (' + operation + ').'); }
+}
+
+function vvCheckDispatchPreviewConnection() {
+  var book = SpreadsheetApp.getActiveSpreadsheet();
+  vvPreviewAssert_(book);
+  vvDispatchListRuns_(PropertiesService.getScriptProperties(), Date.now() - VV_DISPATCH_MAX_AGE);
+  var message = 'Связь с GitHub Actions проверена. Запуск preview не отправлялся.';
+  book.toast(message, 'GitHub preview', 10);
+  console.info(message);
+  return message;
 }
 
 function vvStartDispatchPreview() {
@@ -78,16 +131,20 @@ function vvDispatchMatches_(run, marker) {
     run.path === '.github/workflows/publish-demand.yml' && run.display_title === 'VV preview ' + marker;
 }
 
-function vvDispatchFindRun_(properties, state) {
+function vvDispatchListRuns_(properties, since) {
   var query = '/runs?event=workflow_dispatch&branch=main&per_page=100';
-  if (Number.isFinite(state.requestedAt)) {
-    query += '&created=' + encodeURIComponent('>=' + new Date(state.requestedAt - VV_DISPATCH_CLOCK_SKEW).toISOString());
+  if (Number.isFinite(since)) {
+    query += '&created=' + encodeURIComponent('>=' + new Date(since - VV_DISPATCH_CLOCK_SKEW).toISOString());
   }
-  var listing = vvDispatchPreviewRequest_(properties, VV_DISPATCH_WORKFLOW + query);
+  var listing = vvDispatchPreviewRequest_(properties, VV_DISPATCH_WORKFLOW + query, 'чтение списка запусков');
   if (!listing || !Array.isArray(listing.workflow_runs) || listing.total_count !== listing.workflow_runs.length) {
     throw Error('GitHub вернул неполный список запусков. Проверьте Actions вручную.');
   }
-  var matches = listing.workflow_runs.filter(function (run) {
+  return listing.workflow_runs;
+}
+
+function vvDispatchFindRun_(properties, state) {
+  var matches = vvDispatchListRuns_(properties, state.requestedAt).filter(function (run) {
     return run && run.display_title === 'VV preview ' + state.marker;
   });
   if (matches.length > 1) throw Error('В Actions несколько запусков с этим UUID. Сверьте их вручную.');
@@ -137,7 +194,7 @@ function vvDispatchStart_(properties, passportRow, now) {
     vvDispatchSave_(properties, state);
     var dispatched;
     try {
-      dispatched = vvDispatchPreviewRequest_(properties, VV_DISPATCH_WORKFLOW + '/dispatches',
+      dispatched = vvDispatchPreviewRequest_(properties, VV_DISPATCH_WORKFLOW + '/dispatches', 'отправка preview',
         {ref: 'main', inputs: {mode: 'preview', request_id: marker}});
     } catch (error) {
       if ([401, 403, 404, 422, 429].includes(error.httpStatus)) {
@@ -182,7 +239,7 @@ function vvDispatchCheck_(properties, state, now) {
   }
   if (!Number.isSafeInteger(state.runId) || state.runId <= 0) throw Error('Некорректный номер запуска в GitHub.');
   var path = 'actions/runs/' + state.runId;
-  var result = vvDispatchPreviewRequest_(properties, path);
+  var result = vvDispatchPreviewRequest_(properties, path, 'чтение запуска');
   if (!vvDispatchMatches_(result, state.marker) || result.id !== state.runId) {
     throw Error('GitHub вернул запуск, который не соответствует этому запросу.');
   }
@@ -198,7 +255,7 @@ function vvDispatchCheck_(properties, state, now) {
     if (!Number.isSafeInteger(result.run_attempt) || result.run_attempt <= 0) {
       throw Error('GitHub не вернул номер попытки запуска.');
     }
-    var jobList = vvDispatchPreviewRequest_(properties, path + '/attempts/' + result.run_attempt + '/jobs?per_page=100');
+    var jobList = vvDispatchPreviewRequest_(properties, path + '/attempts/' + result.run_attempt + '/jobs?per_page=100', 'чтение заданий');
     if (!jobList || !Array.isArray(jobList.jobs) || jobList.total_count !== jobList.jobs.length) {
       throw Error('GitHub вернул неполный список заданий. Проверьте результат позже.');
     }

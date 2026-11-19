@@ -37,11 +37,14 @@ const passedJob = {name: 'preview', run_id: id, status: 'completed', conclusion:
   steps: [{name: 'Сверить испытательный паспорт', status: 'completed', conclusion: 'success'}]};
 const listingPath = route + '/workflows/publish-demand.yml/runs';
 const jobsPath = route + '/runs/' + id + '/attempts/2/jobs';
+const fakePat = ['github', 'pat', 'TEST_ONLY'].join('_');
+const fetchScope = 'https://www.googleapis.com/auth/script.external_request';
 const list = (...workflow_runs) => ({value: {total_count: workflow_runs.length, workflow_runs}});
 const jobs = (...items) => ({value: {total_count: items.length, jobs: items}});
 
-function harness(handle, {allowed = false, token = 'test-auth', locked = false, initialState = null} = {}) {
+function harness(handle, {allowed = false, token = fakePat, locked = false, externalAccess = true, initialState = null} = {}) {
   const log = [];
+  const scopeChecks = [];
   const toasts = [];
   const lookups = [];
   const values = new Map([['VV_PREVIEW_DISPATCH_TOKEN', token],
@@ -51,13 +54,22 @@ function harness(handle, {allowed = false, token = 'test-auth', locked = false, 
     setProperty: (k, v) => values.set(k, v),
   };
   let row = grid[1];
-  const api = runInNewContext(gasCode + '\n({vvDispatchStart_, vvDispatchStatus_, vvStartDispatchPreview, vvConfirmDispatchPreview, vvAddDispatchPreviewMenu_})', {
+  const api = runInNewContext(gasCode + '\n({vvDispatchStart_, vvDispatchStatus_, vvStartDispatchPreview, vvConfirmDispatchPreview, vvAddDispatchPreviewMenu_, vvCheckDispatchPreviewConnection})', {
     Date: class extends Date { static now() { return now.getTime(); } },
     LockService: {getScriptLock: () => ({tryLock: () => !locked, releaseLock() {}})},
+    ScriptApp: {
+      AuthMode: {FULL: 'FULL'},
+      AuthorizationStatus: {REQUIRED: 'REQUIRED'},
+      getAuthorizationInfo: (mode, scopes) => {
+        scopeChecks.push([mode, ...scopes]);
+        return {getAuthorizationStatus: () => externalAccess ? 'NOT_REQUIRED' : 'REQUIRED'};
+      },
+    },
     UrlFetchApp: {fetch: (url, options) => {
       const target = new URL(url);
       const call = {target, path: target.pathname, method: options.method ?? 'get',
-        body: options.payload && JSON.parse(options.payload), version: options.headers['X-GitHub-Api-Version'],
+        body: options.payload && JSON.parse(options.payload), headers: options.headers, escaping: options.escaping,
+        muteHttpExceptions: options.muteHttpExceptions,
         followsRedirects: options.followRedirects};
       log.push(call);
       const {status = 200, value, raw} = handle(call);
@@ -80,6 +92,7 @@ function harness(handle, {allowed = false, token = 'test-auth', locked = false, 
   return {start: (input = row, time = now.getTime()) => api.vvDispatchStart_(properties, input, time),
     check: (time = now.getTime()) => api.vvDispatchStatus_(properties, time),
     startFromBook: api.vvStartDispatchPreview, checkFromBook: api.vvConfirmDispatchPreview,
+    checkConnection: api.vvCheckDispatchPreviewConnection, scopeChecks,
     addMenu: api.vvAddDispatchPreviewMenu_, setRow: next => { row = next; }, log, toasts, lookups};
 }
 
@@ -146,7 +159,7 @@ test('menu callbacks read the registered agent passport, dispatch UUID only and 
     route + '/runs/' + id, jobsPath]);
   for (const call of h.log) {
     assert.equal(call.target.hostname, 'api.github.com');
-    assert.equal(call.version, '2026-03-10');
+    assert.equal(call.headers['X-GitHub-Api-Version'], '2026-03-10');
     assert.equal(call.followsRedirects, false);
   }
   assert.equal(h.log.filter(call => call.method === 'post').length, 1);
@@ -205,13 +218,84 @@ test('a definite authorization error can retry after a fresh lookup and errors n
     if (call.path === listingPath) return list();
     return denied ? {status: 403, value: 'private error body'} : {value: {workflow_run_id: id}};
   });
-  assert.throws(definite.start, /^Error: GitHub Actions вернул HTTP 403\. Проверьте права токена Actions: write/);
+  assert.throws(definite.start, /^Error: GitHub Actions вернул HTTP 403 \(отправка preview\)\. Проверьте права токена Actions: write/);
   denied = false;
   assert.equal(definite.start().runId, id);
   assert.deepEqual(definite.log.map(call => call.method), ['get', 'post', 'get', 'post']);
   const config = harness(() => assert.fail('No request without a token'), {token: null});
   assert.throws(config.start, /VV_PREVIEW_DISPATCH_TOKEN/);
   assert.equal(config.log.length, 0);
+});
+
+test('connection check uses the production-shaped GET query and expected headers without dispatching', () => {
+  const h = harness(() => list(), {allowed: true, token: '  ' + fakePat + '\n'});
+  assert.equal(h.checkConnection(), 'Связь с GitHub Actions проверена. Запуск preview не отправлялся.');
+  assert.deepEqual(h.scopeChecks, [['FULL', fetchScope]]);
+  assert.equal(h.log.length, 1);
+  const [request] = h.log;
+  assert.equal(request.path, listingPath);
+  assert.equal(request.method, 'get');
+  assert.equal(request.body, undefined);
+  assert.equal(request.headers.Authorization, 'Bearer ' + fakePat);
+  assert.equal(request.headers.Accept, 'application/vnd.github+json');
+  assert.equal(request.escaping, false);
+  assert.equal(request.muteHttpExceptions, true);
+  assert.equal(request.followsRedirects, false);
+  assert.equal(request.target.search, '?event=workflow_dispatch&branch=main&per_page=100&created=%3E%3D2026-11-19T01%3A55%3A00.000Z');
+  assert.throws(h.check, /ещё не запрошен/);
+  const guarded = harness(() => assert.fail('No request outside the test workbook'));
+  assert.throws(guarded.checkConnection, /вне испытательного контура/);
+});
+
+test('malformed PAT values and missing OAuth consent are caught before calling UrlFetchApp', () => {
+  const noNetwork = () => assert.fail('Request with invalid setup');
+  for (const token of ['Bearer ' + fakePat, '"' + fakePat + '"', fakePat + '\r\nInjected: value', 'ghp_INVALID', 'github_pat_']) {
+    const h = harness(noNetwork, {token});
+    assert.throws(h.start, error => {
+      assert.match(error.message, /^\[VV_FETCH_TOKEN\]/);
+      assert.doesNotMatch(error.message, /TEST_ONLY|Injected/);
+      return true;
+    });
+    assert.equal(h.log.length, 0);
+    assert.equal(h.scopeChecks.length, 0);
+  }
+  const h = harness(noNetwork, {externalAccess: false});
+  assert.throws(h.start, /\[VV_FETCH_OAUTH\].*чтение списка запусков.*script\.external_request/);
+  assert.equal(h.log.length, 0);
+});
+
+test('transport failures report a safe category and never dispatch when the list GET fails', () => {
+  const failures = [
+    ['HEADER', 'Invalid argument: Header Authorization contains a line break'],
+    ['OAUTH', 'Exception: You do not have permission to call UrlFetchApp.fetch'],
+    ['POLICY', 'UrlFetch calls to https://api.github.com are not permitted by your admin'],
+    ['ARGUMENT', 'Invalid argument: https://example.invalid/'],
+    ['TIMEOUT', 'Request timed out'],
+    ['NETWORK', 'SSL certificate validation failed'],
+    ['QUOTA', 'Service invoked too many times for one day: urlfetch'],
+    ['UNKNOWN', 'Unexpected exception'],
+  ];
+  for (const [code, message] of failures) {
+    const h = harness(() => { throw Error(message + ' confidential-response-marker'); });
+    assert.throws(h.start, error => {
+      assert.ok(error.message.startsWith('[VV_FETCH_' + code + '] GitHub Actions (чтение списка запусков).'));
+      assert.doesNotMatch(error.message, /confidential-response-marker|example\.invalid/);
+      return true;
+    });
+    assert.deepEqual(h.log.map(request => request.method), ['get']);
+    assert.throws(h.check, /ещё не запрошен/);
+  }
+});
+
+test('HTTP rejection from GitHub is separate from UrlFetchApp errors and cannot trigger POST', () => {
+  const h = harness(() => ({status: 401, value: 'confidential-response-marker'}));
+  assert.throws(h.start, error => {
+    assert.equal(error.httpStatus, 401);
+    assert.match(error.message, /^GitHub Actions вернул HTTP 401 \(чтение списка запусков\)/);
+    assert.doesNotMatch(error.message, /confidential-response-marker/);
+    return true;
+  });
+  assert.deepEqual(h.log.map(request => request.method), ['get']);
 });
 
 test('a fresh passport is required for a new dispatch, with a final lookup before retiring an unresolved old one', () => {
@@ -255,7 +339,7 @@ test('recover previous script state and retry a failed status lookup without a s
   const h = harness(call => call.path === jobsPath
     ? (ready ? jobs(passedJob) : {status: 503, value: 'private error detail'})
     : {value: runs('completed')}, {initialState: {marker: uuid, runId: id, done: false}});
-  assert.throws(h.check, /^Error: GitHub Actions вернул HTTP 503\.$/);
+  assert.throws(h.check, /^Error: GitHub Actions вернул HTTP 503 \(чтение заданий\)\.$/);
   ready = true;
   assert.equal(h.check().verified, true);
   assert.ok(h.log.every(call => call.method === 'get'));
