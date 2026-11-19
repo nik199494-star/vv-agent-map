@@ -75,10 +75,14 @@ const groupIds = (page, selector) => page.locator(`${selector} .point-card`).eva
 const content = (page, selector) => page.locator(selector).textContent();
 
 async function assertGroups(page, nearest, unresolved, need) {
+  const isNearbySearch = await page.locator('#nearby-panel').isVisible();
   assert.deepEqual(await groupIds(page, '#results'), nearest);
   assert.deepEqual(await groupIds(page, unknownGroup), unresolved);
   assert.equal(new Set(await groupIds(page, '#result-body')).size, nearest.length + unresolved.length);
-  assert.equal(await content(page, '#count'), String(nearest.length + unresolved.length));
+  assert.equal(await content(page, '#count'), String(nearest.length));
+  assert.equal(await page.locator('#unknown-distance-metric').isVisible(), isNearbySearch);
+  if (isNearbySearch) assert.equal(await content(page, '#unknown-distance-count'), String(unresolved.length));
+  assert.equal(await content(page, '#total-label'), isNearbySearch ? 'Недобор по обеим группам' : 'Суммарный недобор');
   assert.equal(await content(page, '#total'), String(need));
   assert.equal(await page.locator(`${unknownGroup} .point-distance`).count(), 0);
 }
@@ -86,9 +90,8 @@ async function assertGroups(page, nearest, unresolved, need) {
 async function applyFilters(page, mobile, update, count) {
   if (mobile) await page.locator('#open-filters').click();
   await update();
-  await page.waitForFunction(expected => document.getElementById('count').textContent === expected, String(count));
+  await page.waitForFunction(expected => document.getElementById('apply-filters').textContent === expected, `Показать ТТ · ${count}`);
   if (mobile) {
-    assert.equal(await content(page, '#apply-filters'), `Показать ТТ · ${count}`);
     await page.locator('#apply-filters').click();
   }
 }
@@ -104,6 +107,8 @@ test('Chromium: two result groups survive mode, radius and filter changes on des
       t.after(() => page.close());
       await openMap(page);
       await assertGroups(page, ['101', '107', '102'], ['105', '106', '108', '104'], 160);
+      assert.equal(await content(page, '#count-label'), 'В радиусе');
+      assert.equal(await content(page, '#unknown-distance-metric dt'), 'Расстояние неизвестно');
       assert.equal(await content(page, '#map-count'), 'В радиусе по прямой · 3');
       assert.equal(await content(page, '#nearby-missing'), 'ТТ без координат · 4');
       assert.equal(await page.locator('#map-frame').isVisible(), true);
@@ -138,9 +143,11 @@ test('Chromium: two result groups survive mode, radius and filter changes on des
       await assertGroups(page, ['101'], ['105', '106', '104'], 52);
       await page.locator('#radius').selectOption('');
       await assertGroups(page, ['101', '102', '103'], ['105', '106', '104'], 76);
+      assert.equal(await content(page, '#count-label'), 'С известным расстоянием');
       assert.equal(await content(page, '#map-count'), 'С известным расстоянием · 3');
       await page.locator('#clear-candidate').click();
       await assertGroups(page, ['103', '105', '106', '101', '102', '104'], [], 76);
+      assert.equal(await content(page, '#count-label'), 'Подходящие ТТ');
       assert.equal(await page.locator('#nearby-missing').isVisible(), false);
       assert.equal(await page.locator('#without-coordinates').isVisible(), false);
       assert.equal(await page.locator('#results .point-distance').count(), 0);
@@ -156,7 +163,8 @@ test('Chromium: unknown-only, independent pagination and fully empty results', {
   const stores = Array.from({length: 47}, (_, i) => point(String(200 + i), 'Москва', [autoDay('Высокий', 1)]));
   await openMap(page, stores);
   assert.equal(await content(page, '#map-count'), 'В радиусе по прямой · 0');
-  assert.equal(await content(page, '#count'), '47');
+  assert.equal(await content(page, '#count'), '0');
+  assert.equal(await content(page, '#unknown-distance-count'), '47');
   await page.locator('#nearby-missing').click();
   assert.equal(await content(page, '#nearby-results-title'), 'Ближайшие ТТ · 0');
   assert.equal(await content(page, '#without-coordinates-title'), 'ТТ без координат · 47');

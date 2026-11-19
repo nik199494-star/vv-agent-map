@@ -68,6 +68,7 @@ input::placeholder { opacity: 1; color: #63786d; }
 .metric-icon { display: grid; place-items: center; width: 35px; height: 35px; flex: 0 0 35px; background: var(--mint); color: var(--green); border-radius: 10px; }
 .metric-icon.warm { background: #fff1e3; color: #985513; }
 .metric dt { color: var(--muted); font-size: 11px; font-weight: 620; white-space: nowrap; }
+.distance-metrics .metric dt { white-space: normal; }
 .metric dd { font-size: 22px; font-weight: 770; line-height: 1.2; letter-spacing: -.045em; font-variant-numeric: tabular-nums; }
 .metric-date dd { font-size: 18px; letter-spacing: -.04em; }
 .notice { background: #fff4e2; color: #714511; border: 1px solid #f1dcb9; padding: 9px 14px; border-radius: 9px; font-size: 13px; margin: 0 0 12px; }
@@ -224,6 +225,7 @@ legend { margin: 0 0 6px; }
   .main { padding-inline: 15px; }
   .topbar { padding-inline: 16px; grid-template-columns: max-content minmax(0, 1.3fr) minmax(0, 1fr) max-content; gap: 11px; }
   .overview { gap: 12px; }
+  .metrics.distance-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric-icon { width: 30px; height: 30px; flex-basis: 30px; }
   .nearby-missing { min-height: 44px; }
   .result-group .more { min-height: 44px; white-space: normal; }

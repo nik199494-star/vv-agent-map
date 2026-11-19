@@ -159,9 +159,16 @@ function renderResults() {
 }
 
 function renderMetrics(filters) {
+  const isNearbySearch = Boolean(candidate);
+  const radiusSet = $('radius').value !== '';
   const resultCount = filtered.length + withoutCoordinates.length;
   const need = [...filtered, ...withoutCoordinates].reduce((sum, point) => sum + point.need, 0);
-  $('count').textContent = data.sourceDate ? number(resultCount) : '—';
+  $('metrics').classList.toggle('distance-metrics', isNearbySearch);
+  $('count-label').textContent = isNearbySearch ? (radiusSet ? 'В радиусе' : 'С известным расстоянием') : 'Подходящие ТТ';
+  $('count').textContent = data.sourceDate ? number(filtered.length) : '—';
+  $('unknown-distance-metric').hidden = !isNearbySearch;
+  $('unknown-distance-count').textContent = data.sourceDate ? number(withoutCoordinates.length) : '—';
+  $('total-label').textContent = isNearbySearch ? 'Недобор по обеим группам' : 'Суммарный недобор';
   $('total').textContent = data.sourceDate ? number(need) : '—';
   const mapped = filtered.filter(point => point.location.xy).length;
   const without = filtered.length - mapped;
@@ -171,7 +178,7 @@ function renderMetrics(filters) {
   $('nearby-missing').textContent = `ТТ без координат · ${number(withoutCoordinates.length)}`;
   const empty = data.status === 'loading' ? 'Загрузка…' : 'Временно недоступно';
   const viewCount = candidate
-    ? `${$('radius').value ? 'В радиусе по прямой' : 'С известным расстоянием'} · ${number(mapped)}`
+    ? `${radiusSet ? 'В радиусе по прямой' : 'С известным расстоянием'} · ${number(mapped)}`
     : view === 'map' ? `На карте ${number(mapped)} из ${number(resultCount)}` : `Найдено ТТ · ${number(resultCount)}`;
   $('map-count').textContent = data.sourceDate ? viewCount : empty;
   $('result-meta').textContent = data.sourceDate ? (!candidate && without ? `Без маркера · ${number(without)}` : `Всего · ${number(resultCount)}`) : empty;

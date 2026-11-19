@@ -41,9 +41,10 @@
   <main class="main">
     <section class="overview" aria-labelledby="page-title">
       <div class="intro"><h1 id="page-title">Карта потребности</h1><p>Подбор торговой точки для кандидата</p></div>
-      <dl class="metrics">
-        <div class="metric"><span class="metric-icon" data-icon="pin"></span><div><dt>Подходящие ТТ</dt><dd id="count">—</dd></div></div>
-        <div class="metric"><span class="metric-icon warm" data-icon="users"></span><div><dt>Суммарный недобор</dt><dd id="total">—</dd></div></div>
+      <dl class="metrics" id="metrics">
+        <div class="metric"><span class="metric-icon" data-icon="pin"></span><div><dt id="count-label">Подходящие ТТ</dt><dd id="count">—</dd></div></div>
+        <div class="metric" id="unknown-distance-metric" hidden><span class="metric-icon" data-icon="target"></span><div><dt>Расстояние неизвестно</dt><dd id="unknown-distance-count">—</dd></div></div>
+        <div class="metric"><span class="metric-icon warm" data-icon="users"></span><div><dt id="total-label">Суммарный недобор</dt><dd id="total">—</dd></div></div>
         <div class="metric metric-date"><span class="metric-icon" data-icon="calendar"></span><div><dt>Потребность на</dt><dd id="hrm-date">—</dd></div></div>
       </dl>
     </section>
