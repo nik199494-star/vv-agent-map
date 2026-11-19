@@ -17,8 +17,54 @@
 1. Просмотреть diff, список статических файлов из `build.mjs` и результаты PR CI. Обновления данных и интерфейса проверяются в отдельных PR. Изменение ветки `main` требует согласования владельца.
 2. В репозитории создать Environment `demand-dispatch-preview` с единственной разрешённой веткой `main`. Добавить `VV_PREVIEW_AGENT_ID` и `VV_PREVIEW_SHEETS_READER` для уже настроенной испытательной агентской витрины. Сервисная учётная запись читает только эту витрину. Сохранить существующее окружение `demand-preview` для испытательной ветки. [Настройка окружений GitHub](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
 3. После согласованного merge подготовить свежий паспорт в испытательном Apps Script. В GitHub выполнить `workflow_dispatch` с веткой `main`, значением `mode=preview` и UUID из A2. Вход `request_id` содержит только UUID, публичный лог подтверждает результат проверки. GitHub требует наличие workflow в ветке по умолчанию. [Запуск workflow вручную](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
-4. Для проверки транспорта добавить `automation/DispatchPreview.gs` отдельным файлом в уже установленный **испытательный** проект Apps Script. В свойствах этого проекта указать `VV_PREVIEW_DISPATCH_TOKEN` с ограничением на этот репозиторий и разрешением `Actions: write`. Разрешить запрошенный внешний доступ. Вызвать `vvStartDispatchPreview`, дождаться завершения по полученному ID и вызвать `vvConfirmDispatchPreview`. Сверить, что шаг «Сверить испытательный паспорт» завершился успешно и Apps Script показал «Испытательный паспорт подтверждён». [Контракт GitHub REST API](https://docs.github.com/en/rest/actions/workflows?apiVersion=2026-03-10#create-a-workflow-dispatch-event)
-5. При HTTP 401 или 403 проверить действительность токена и `Actions: write`. При HTTP 404 проверить merge, имя workflow и права репозитория. При HTTP 422 сверить ветку и входы. При тайм-ауте или HTTP 5xx сначала вызвать `vvConfirmDispatchPreview`. Статус ищет точное имя запуска по UUID и сохраняет найденный ID. Если GitHub не показывает запуск, продолжить после ручной проверки Actions. Очистить `VV_MAIN_PREVIEW_STATE` допустимо после подтверждения отсутствия соответствующего активного запуска. Отмена, пропуск задания или расхождение паспорта считаются незавершённой проверкой.
+4. Подключить пункты меню в испытательной рабочей копии и выполнить проверку по инструкции ниже. Для ручного запуска и проверки из Apps Script используйте разные паспорта, чтобы UUID однозначно указывал на один запуск.
+
+## Установка меню «ВВ Preview»
+
+1. В **испытательной рабочей книге** открыть «Расширения» → «Apps Script». В редакторе добавить скрипт `DispatchPreview` и вставить содержимое `automation/DispatchPreview.gs`. Если этот файл уже установлен, заменить его содержимое. В проекте должна остаться одна пара функций `vvStartDispatchPreview` и `vvConfirmDispatchPreview`.
+2. В установленном `Код.gs` заменить только функцию `onOpen` показанным ниже вариантом. Остальные функции, включая `vvPreviewAllowed_` и `vvPreviewAssert_`, сохраняются. Вариант соответствует меню установленного испытательного пакета. [Меню Google Apps Script](https://developers.google.com/apps-script/guides/menus)
+
+```js
+function onOpen() {
+  if (!vvPreviewAllowed_(SpreadsheetApp.getActiveSpreadsheet())) return;
+  var menu = SpreadsheetApp.getUi().createMenu('ВВ Preview')
+    .addItem('Принять снимок и создать паспорт preview', 'vvAcceptAndPublish')
+    .addItem('Связать испытательные копии', 'vvPreviewRebind')
+    .addItem('Проверить ссылки и формулы v2', 'vvPreviewInspect')
+    .addSeparator()
+    .addItem('Принять RAW и сохранить снимок', 'refreshDemand')
+    .addItem('Откатить автоисправления', 'vvRollbackDictionary');
+  vvAddDispatchPreviewMenu_(menu).addToUi();
+}
+```
+
+3. В GitHub открыть Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. Указать Resource owner `nik199494-star`, разумный срок действия, Repository access → Only select repositories → `vv-agent-map`. В Repository permissions установить Actions → Read and write. Сохранить токен в Apps Script → «Настройки проекта» → «Свойства скрипта» как `VV_PREVIEW_DISPATCH_TOKEN`. Значение вводится только в свойствах испытательного проекта. При первом запуске авторизовать внешний доступ Google. [Токены GitHub](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens) · [Разрешения workflow dispatch](https://docs.github.com/en/rest/actions/workflows?apiVersion=2026-03-10#create-a-workflow-dispatch-event)
+4. Сохранить проект и перезагрузить испытательную рабочую книгу. В меню «ВВ Preview» выбрать «Принять снимок и создать паспорт preview». Созданный паспорт действителен шесть часов. Затем нажать «Запустить проверку GitHub». Apps Script берёт UUID из `Паспорт preview!A2` зарегистрированной испытательной агентской книги и отправляет только UUID и параметры `main / preview`. До завершения прогона сохранить текущий паспорт в A2.
+5. Нажать «Проверить результат GitHub». Если запуск идёт, вернуться к проверке немного позже. Сообщение «Испытательный паспорт подтверждён» с номером запуска появляется после проверки того же ID, ветки, события, workflow и UUID, а также успешных задания `preview` и шага «Сверить испытательный паспорт» в точной завершённой попытке. При ошибке или пропуске этого шага подтверждения нет.
+
+### Если меню сообщает об ошибке UrlFetchApp
+
+1. В существующем испытательном Apps Script заменить только содержимое файла `DispatchPreview.gs` версией из PR. Меню и `Код.gs` уже подключены. Состояние `VV_MAIN_PREVIEW_STATE` сохраняется.
+2. В «Общих сведениях» проекта проверить область OAuth `https://www.googleapis.com/auth/script.external_request`. Apps Script определяет её по использованию `UrlFetchApp`. При наличии явного списка `oauthScopes` в манифесте область должна присутствовать в списке. Наличие области в проекте и согласие конкретного пользователя проверяются отдельно. Команды GitHub и диагностическая функция вызывают `ScriptApp.requireScopes` до работы со снимком и GitHub. Если Google откроет окно разрешений, подтвердить «Подключение к внешнему сервису» под учётной записью, которая запускает preview, затем повторить вызов. [Запрос отдельных областей OAuth](https://developers.google.com/apps-script/concepts/scopes)
+3. В свойстве `VV_PREVIEW_DISPATCH_TOKEN` должно быть только значение fine-grained PAT с `Actions: write` для этого репозитория. Не вставляйте `Bearer`, кавычки или переносы внутри значения. Скрипт сам формирует заголовок `Authorization: Bearer …`. [Аутентификация GitHub REST API](https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api)
+4. В редакторе испытательного проекта выбрать `vvCheckDispatchPreviewConnection` и нажать «Выполнить». Эта функция делает тот же GET списка запусков, который выполняется перед отправкой preview. При успехе в журнале появится «Связь с GitHub Actions проверена. Запуск preview не отправлялся». После этого создать свежий паспорт и запустить проверку из меню.
+
+| Сообщение | Что проверить |
+| --- | --- |
+| `VV_FETCH_TOKEN` / `VV_FETCH_HEADER` | Формат значения PAT в свойствах скрипта. |
+| `VV_FETCH_OAUTH` | Отказ получен от самого `UrlFetchApp`. Проверить согласие пользователя и повторить `vvCheckDispatchPreviewConnection`. |
+| `VV_FETCH_POLICY` | Разрешён ли `https://api.github.com` политикой Google Workspace. [Ограничения внешних URL](https://developers.google.com/apps-script/guides/support/troubleshooting#urlfetch_calls_to_url_are_not_permitted_by_your_admin) |
+| `VV_FETCH_ARGUMENT` | Установлена ли актуальная версия файла со сформированным URL. |
+| `VV_FETCH_TIMEOUT` / `VV_FETCH_NETWORK` / `VV_FETCH_QUOTA` / `VV_FETCH_UNKNOWN` | Повторить проверку связи позже и сообщить код с названием операции, если сбой сохраняется. |
+| `HTTP 401/403/404` | Запрос получил HTTP-ответ. Сверить срок и права токена или доступ к workflow в `main`. |
+
+В журнал попадают только фиксированное сообщение, код и операция или HTTP-статус. Ошибка GET списка останавливает выполнение до POST. Ошибка после попытки POST обрабатывается по правилам ниже.
+
+### Если отправка preview не вернула номер запуска
+
+После тайм-аута, HTTP 5xx или ответа без ID нажать «Проверить результат GitHub». Скрипт ищет точный UUID в Actions и привязывает найденный запуск. Повторное нажатие «Запустить проверку GitHub» для этого UUID тоже проверяет статус. Пока исход отправки неизвестен, второй POST с тем же UUID не отправляется. Если срок паспорта истёк, а запуски в Actions по этому UUID отсутствуют, проверка закрывает ожидание и можно создать новый паспорт. Несколько совпадений или неполный ответ списка требуют сверки в Actions.
+
+При HTTP 401, 403 или 404 проверить срок действия и права токена, доступ к репозиторию и наличие workflow в `main`. При HTTP 422 сверить параметры и возраст паспорта. После исправления повторный запуск сначала проверяет существующие запуски по UUID. Если после обновления файла осталась старая запись состояния без времени и номера запуска, сначала проверьте статус с исходным паспортом или вручную сверяйте Actions по UUID. Очищайте служебное свойство `VV_MAIN_PREVIEW_STATE` только после проверки, что соответствующий запуск отсутствует.
 
 ## Контрольные точки первого выпуска данных
 
@@ -30,4 +76,4 @@
 
 ## Доказательства и ограничения
 
-Живое чтение испытательной витрины уже прошло в [облачном sheets](https://github.com/nik199494-star/vv-agent-map/actions/runs/44407923857). В этом PR маршрут от Apps Script до задания и обратно проверяется на подставных HTTP-ответах. Облачный `workflow_dispatch` из `main` и живое восстановление Pages требуют отдельного согласованного прогона. Тесты подтверждают побайтовое восстановление, реакцию на частичный выпуск и ограничение текущего кеша.
+Живое чтение испытательной витрины прошло в [облачном sheets](https://github.com/nik199494-star/vv-agent-map/actions/runs/44407923857). Ручной [preview из main от 19.11.2026](https://github.com/nik199494-star/vv-agent-map/actions/runs/44528138928) завершился успешно в обоих заданиях. Транспорт Apps Script и обработку сбоев проверяют тесты с подставными HTTP-ответами. Живой результат из меню подтверждается отдельным запуском после установки и настройки токена. Живое восстановление Pages требует отдельного согласованного прогона.
