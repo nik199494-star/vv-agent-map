@@ -1,0 +1,55 @@
+name: Проверка выпуска карты
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('VV preview {0}', inputs.request_id) || 'Проверка инфраструктуры карты' }}
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Режим проверки
+        required: true
+        type: choice
+        options: [preview]
+      request_id:
+        description: UUID из A2 испытательного паспорта
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Разрешить только preview из main
+        if: github.event_name == 'workflow_dispatch'
+        run: node scripts/dispatch-preview.mjs gate
+      - run: node --test
+      - run: node build.mjs
+
+  preview:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    environment: demand-dispatch-preview
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Сверить испытательный паспорт
+        env:
+          VV_PREVIEW_AGENT_ID: ${{ secrets.VV_PREVIEW_AGENT_ID }}
+          VV_PREVIEW_SHEETS_READER: ${{ secrets.VV_PREVIEW_SHEETS_READER }}
+        run: node scripts/dispatch-preview.mjs verify

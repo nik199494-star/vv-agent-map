@@ -1,0 +1,6 @@
+.env
+.env.*
+.data/
+dist/
+service-account*.json
+node_modules/
