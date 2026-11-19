@@ -42,7 +42,7 @@ let updateError = false;
 let filtered = [];
 let withoutCoordinates = [];
 let candidate = null;
-let candidateMarker;
+let candidateMarker, candidateRange, previewPointId;
 let selectedCity = '';
 let cityOptions = [];
 let optionIndex = -1;
@@ -54,7 +54,10 @@ let visible = pageSize, visibleWithoutCoordinates = pageSize;
 let selectedPoint, selectedRole;
 let inputTimer, toastTimer, fetching = false;
 const selectedTransports = new Set();
-const mobile = window.matchMedia('(max-width: 720px)');
+const mobile = window.matchMedia('(max-width: 759px)');
+const periods = ['day', 'evening', 'night'];
+const roleNoun = new Intl.PluralRules('ru');
+const roleCount = {one: 'роль', few: 'роли', many: 'ролей', other: 'ролей'};
 
 const roleIcon = transport => transport.endsWith('-night') ? 'night' : (transport || 'shop');
 const rolePriority = role => role.priority ? `<span class="priority ${tone(role.priority)}"><span class="priority-dot"></span>${html(role.priority)}</span>` : '';
@@ -62,7 +65,7 @@ const focusBadge = '<span class="focus-badge">Суперфокус</span>';
 const numberField = id => $(id).value && $(id).validity.valid ? $(id).valueAsNumber : null;
 function getFilters() {
   return {
-    search: candidate ? '' : $('search').value, city: selectedCity, transport: [...selectedTransports], priority: $('priority').value,
+    city: selectedCity, transport: [...selectedTransports], priority: $('priority').value,
     need: numberField('need'), schedule: $('schedule').value, shift: numberField('shift'), age: numberField('age'),
     incomeFrom: numberField('income-from'), incomeTo: numberField('income-to'), superFocus: $('super-focus').value,
     format: $('work-format').value, minor: $('minor').checked, conditions: $('conditions').value,
@@ -89,7 +92,9 @@ function renderTransport() {
 
 function updateSource() {
   const outdated = data.sourceDate && isOutdated(data.sourceDate);
-  $('hrm-date').textContent = data.sourceDate ?? '—';
+  document.querySelectorAll('[data-hrm-date]').forEach(date => {
+    date.textContent = data.sourceDate ?? '—';
+  });
   const notice = $('source-notice');
   const fallback = data.sourceDate ? `Показана последняя сохранённая потребность от ${data.sourceDate}.` : 'Потребность временно недоступна. Попробуйте позже.';
   notice.textContent = updateError ? fallback : outdated ? `Последняя опубликованная потребность от ${data.sourceDate}.` : '';
@@ -116,21 +121,54 @@ function addressState(point) {
   return point.location.xy ? '' : locationReasons[point.location.reason] || locationReasons.pending;
 }
 
-function renderPointCard(point) {
+function renderRoleConditions(role) {
+  const partTime = role.schedule.includes('part');
+  const schedule = periods.filter(period => role.schedule.includes(period));
+  return `<div class="role-conditions">
+    <p class="${partTime ? 'part-confirmed' : 'unconfirmed'}">${partTime ? 'Подработка возможна' : 'Подработка не подтверждена'}</p>
+    <p${role.shift === null ? ' class="unconfirmed"' : ''}>${role.shift === null ? 'Минимальная смена не подтверждена' : `Минимальная смена — ${number(role.shift)} ч`}</p>
+    <dl class="role-periods"><dt>График</dt><dd>${schedule.length
+      ? schedule.map(period => `<span class="period${period === 'night' ? ' period-night' : ''}">${SCHEDULE[period]}</span>`).join('')
+      : '<span class="unconfirmed">Не подтверждён</span>'}</dd></dl>
+  </div>`;
+}
+
+function renderPointCard(point, index = -1) {
   const role = point.matched[0];
-  const other = point.matched.length - 1;
+  const id = html(point.id);
+  const other = point.roles.length - 1;
   const loc = addressState(point);
-  return `<button type="button" class="point-card" data-point="${point.id}">
-      <span class="point-title"><strong>ТТ №${point.id}</strong><span class="point-badges">${point.matched.some(item => item.superFocus) ? focusBadge : ''}${rolePriority(role)}</span></span>
-      <span class="point-address">${html(point.address || point.city || 'Адрес уточняется')}</span>
-      <span class="point-role">${icon(roleIcon(role.transport))}<span>${html(role.title)}</span>${other ? `<span class="other-count" aria-label="Других подходящих ролей: ${other}">+${other}</span>` : ''}</span>
-      ${loc ? `<span class="address-state ${point.location.state}">${loc}</span>` : ''}
-      <span class="point-bottom"><span>Недобор <strong>${number(point.need)}</strong></span>${role.income ? `<strong class="point-income" title="Ориентир дохода">≈ ${incomeText(role.income)}</strong>` : ''}${point.distance !== undefined ? `<strong class="point-distance" title="По прямой">${number(Math.round(point.distance * 10) / 10)} км</strong>` : ''}</span>
-    </button>`;
+  const knownDistance = point.distance !== undefined;
+  return `<article class="point-card${previewPointId === point.id ? ' is-selected' : ''}" data-point="${id}">
+    <div class="point-head"><h3 class="point-address">${html(point.address || point.city || 'Адрес уточняется')}</h3>
+      ${knownDistance ? `<span class="point-distance" title="По прямой">${number(Math.round(point.distance * 10) / 10)} км</span>` : ''}
+    </div>
+    <section aria-label="Условия роли ${html(role.title)}">
+      <div class="point-role"><span class="point-id">${knownDistance && index >= 0 ? `${index + 1} · ` : ''}ТТ №${id}</span>
+        <strong>${html(role.title)}</strong>${other ? `<span class="other-count">Ещё ${number(other)} ${roleCount[roleNoun.select(other)]}</span>` : ''}
+        <span class="point-badges">${role.superFocus ? focusBadge : ''}${rolePriority(role)}</span>
+      </div>
+      ${renderRoleConditions(role)}
+    </section>
+    ${loc ? `<p class="address-state">${loc}</p>` : ''}
+    <div class="point-foot"><p>Недобор по ролям в выдаче — <strong>${number(point.need)} чел.</strong></p>
+      <button type="button" class="text-button" data-open-point aria-label="Все роли и условия ТТ №${id}">Все роли и условия <span aria-hidden="true">›</span></button>
+    </div>
+  </article>`;
+}
+
+function renderMapPreview() {
+  const preview = $('map-preview');
+  const selected = candidate ? filtered.findIndex(point => point.id === previewPointId) : -1;
+  const index = candidate && filtered.length ? Math.max(0, selected) : -1;
+  previewPointId = filtered[index]?.id;
+  preview.hidden = index < 0;
+  preview.innerHTML = index < 0 ? '' : renderPointCard(filtered[index], index);
 }
 
 function renderResults() {
   const results = $('results');
+  renderMapPreview();
   $('result-body').setAttribute('aria-busy', String(data.status === 'loading'));
   $('more').hidden = filtered.length <= visible;
   $('nearby-results-title').hidden = !candidate || (!filtered.length && !withoutCoordinates.length);
@@ -165,24 +203,24 @@ function renderMetrics(filters) {
   const radiusSet = $('radius').value !== '';
   const resultCount = filtered.length + withoutCoordinates.length;
   const need = [...filtered, ...withoutCoordinates].reduce((sum, point) => sum + point.need, 0);
-  $('metrics').classList.toggle('distance-metrics', isNearbySearch);
-  $('count-label').textContent = isNearbySearch ? (radiusSet ? 'В радиусе' : 'С известным расстоянием') : 'Подходящие ТТ';
+  $('count-label').textContent = isNearbySearch ? (radiusSet ? 'В радиусе' : 'С известным расстоянием') : 'ТТ с открытой потребностью';
   $('count').textContent = data.sourceDate ? number(filtered.length) : '—';
   $('unknown-distance-metric').hidden = !isNearbySearch;
+  $('nearby-missing').disabled = !withoutCoordinates.length;
   $('unknown-distance-count').textContent = data.sourceDate ? number(withoutCoordinates.length) : '—';
   $('total-label').textContent = isNearbySearch ? 'Недобор по обеим группам' : 'Суммарный недобор';
   $('total').textContent = data.sourceDate ? number(need) : '—';
   const mapped = filtered.filter(point => point.location.xy).length;
   const without = filtered.length - mapped;
-  $('view-title').textContent = candidate ? 'ТТ рядом' : 'Торговые точки';
-  $('results-title').textContent = candidate ? 'Подбор по адресу' : 'Подходящие ТТ';
-  $('nearby-missing').hidden = !withoutCoordinates.length;
-  $('nearby-missing').textContent = `ТТ без координат · ${number(withoutCoordinates.length)}`;
+  $('view-title').textContent = candidate ? 'Подбор по адресу' : 'Каталог ТТ';
+  $('results-title').textContent = candidate ? 'Список ТТ' : 'ТТ с открытой потребностью';
+  $('start-hint').hidden = isNearbySearch;
   const empty = data.status === 'loading' ? 'Загрузка…' : 'Временно недоступно';
   const viewCount = candidate
     ? `${radiusSet ? 'В радиусе по прямой' : 'С известным расстоянием'} · ${number(mapped)}`
     : view === 'map' ? `На карте ${number(mapped)} из ${number(resultCount)}` : `Найдено ТТ · ${number(resultCount)}`;
   $('map-count').textContent = data.sourceDate ? viewCount : empty;
+  $('map-count').hidden = isNearbySearch || view === 'list' || !data.sourceDate;
   $('result-meta').textContent = data.sourceDate ? (!candidate && without ? `Без маркера · ${number(without)}` : `Всего · ${number(resultCount)}`) : empty;
   const count = [filters.city, filters.priority, filters.superFocus, filters.need, filters.schedule, filters.format, filters.shift, filters.age, filters.conditions, filters.incomeFrom ?? filters.incomeTo].filter(value => value !== null && value !== '').length + filters.transport.length + Number(filters.minor);
   $('filter-count').textContent = count;
@@ -211,7 +249,10 @@ function fit(positions) {
 function updateCity(force = false) {
   if (!map || view !== 'map') return;
   if (candidate) {
-    if (force) map.setView(candidate.xy, 14);
+    if (force) {
+      if (candidateRange) map.fitBounds(candidateRange.getBounds(), {padding: [18, 18], maxZoom: 14});
+      else map.setView(candidate.xy, 14);
+    }
     return;
   }
   if (!selectedCity) {
@@ -239,6 +280,17 @@ function updateCity(force = false) {
 
 function renderMap() {
   if (map && view === 'map') {
+    const radius = Number($('radius').value);
+    if (candidate && radius) {
+      if (!candidateRange) {
+        candidateRange = L.circle(candidate.xy, {interactive: false, color: '#176d4b', fillOpacity: 0.08,
+          opacity: 0.7, dashArray: '5 4', weight: 2}).addTo(map);
+      }
+      candidateRange.setLatLng(candidate.xy).setRadius(radius * 1000);
+    } else {
+      candidateRange?.remove();
+      candidateRange = null;
+    }
     if (data.tiles && JSON.stringify(data.tiles) !== tileKey) {
       tileKey = JSON.stringify(data.tiles);
       tiles?.remove();
@@ -254,14 +306,23 @@ function renderMap() {
     const key = located.map(point => [point.id, point.location.xy, point.matched[0].priority, highlighted.has(point.id)].join(':')).join('|');
     if (key !== markerKey) {
       cluster.clearLayers();
-      const markers = located.map(point => {
+      const markers = located.map((point, index) => {
         const label = `ТТ №${point.id} — ${point.city}`;
+        const content = candidate ? `<span class="map-marker-index" aria-hidden="true">${index + 1}</span>` : icon('shop');
         const marker = L.marker(point.location.xy, {
           title: label, alt: label, riseOnHover: true,
-          icon: L.divIcon({className: 'map-marker-wrap', iconSize: [34, 34], iconAnchor: [17, 17], html: `<span class="map-marker ${tone(point.matched[0].priority)}${highlighted.has(point.id) ? ' marker-nearby' : ''}">${icon('shop')}</span>`}),
+          icon: L.divIcon({className: 'map-marker-wrap', iconSize: [34, 34], iconAnchor: [17, 17], html: `<span class="map-marker ${tone(point.matched[0].priority)}${highlighted.has(point.id) ? ' marker-nearby' : ''}">${content}</span>`}),
         });
         marker.on('add', () => marker.getElement()?.setAttribute('aria-label', label));
-        marker.on('click', () => showPoint(point.id));
+        marker.on('click', () => {
+          if (candidate) {
+            previewPointId = point.id;
+            visible = Math.max(visible, Math.ceil((index + 1) / pageSize) * pageSize);
+            renderResults();
+            if (!mobile.matches) scrollToResult($('results').children[index]);
+          }
+          showPoint(point.id);
+        });
         return marker;
       });
       cluster.addLayers(markers);
@@ -298,6 +359,16 @@ function chooseView(value) {
   renderMetrics(getFilters());
 }
 
+function scrollToResult(target, focus = false) {
+  if (focus) target.focus({preventScroll: true});
+  if (mobile.matches) {
+    target.scrollIntoView({block: 'nearest'});
+    return;
+  }
+  const scroller = $('result-body');
+  scroller.scrollTop += target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8;
+}
+
 function openCities(query = '') {
   const needle = normalize(query);
   cityOptions = ['', ...data.cities].filter(city => normalize(city || 'Все города').includes(needle));
@@ -324,16 +395,6 @@ function selectCity(value) {
     render(true);
   }
   closeCities();
-}
-
-function setFiltersOpen(open) {
-  if (!mobile.matches && open) return;
-  $('workspace').classList.toggle('filters-open', open);
-  $('open-filters').setAttribute('aria-expanded', String(open));
-  $('filter-backdrop').hidden = !open;
-  for (const node of [document.querySelector('.topbar'), document.querySelector('.overview'), $('nearby-panel'), $('source-notice'), document.querySelector('.map-panel'), document.querySelector('.result-panel')]) node.inert = open;
-  if (open) $('close-filters').focus();
-  else if (mobile.matches) $('open-filters').focus();
 }
 
 function formatMetric(label, value) { return `<div><dt>${label}</dt><dd>${html(value)}</dd></div>`; }
@@ -365,29 +426,42 @@ function routeUrl(point) {
 function renderDetail() {
   const point = selectedPoint;
   const role = selectedRole;
-  const schedule = role.schedule.filter(value => ['day', 'evening', 'night'].includes(value)).map(value => SCHEDULE[value]).join(' · ');
-  const format = role.schedule.filter(value => ['full', 'part'].includes(value)).map(value => SCHEDULE[value]).join(' · ');
+  const matching = point.matched ?? findPoints([point], getFilters())[0]?.matched ?? [];
+  const partial = role.schedule.includes('part');
+  const limit = numberField('shift');
+  const shiftNote = role.shift === null
+    ? `<p class="confirmation-note unconfirmed">${limit === null ? 'Короткий выход по этой роли не подтверждён.' : `Выход на ${number(limit)} ч не подтверждён.`}</p>`
+    : partial ? `<p class="confirmation-note">Подработка — формат занятости. Минимум ${number(role.shift)} ч относится к одному выходу по этой роли.</p>` : '';
   const url = routeUrl(point);
   const hint = addressState(point);
   const distance = candidate && point.location.xy ? distanceKm(candidate.xy, point.location.xy) : null;
+  const radius = Number($('radius').value);
   const cleanUnits = (value, suffix) => value ? `${value}${/₽|руб|км/iu.test(value) ? '' : suffix}` : UNKNOWN;
   $('detail-content').innerHTML = `
     <h2 id="detail-title">ТТ №${point.id}${point.city ? ` — ${html(point.city)}` : ''}</h2>
     <p class="detail-address">${icon('pin')}${html(point.address || 'Адрес уточняется')}</p>
-    ${distance === null ? '' : `<p class="distance-detail">${number(Math.round(distance * 10) / 10)} км по прямой от выбранного места</p>`}
-    ${hint ? `<p class="address-state ${point.location.state}">${hint}</p>` : ''}
-    ${point.roles.length > 1 ? `<p class="roles-label">Посмотреть другие роли на этой ТТ</p><div class="role-navigation" role="group" aria-label="Роли на торговой точке">${point.roles.map(item => `<button type="button" data-role="${item.id}" aria-pressed="${item.id === role.id}" class="button">${html(item.title)} · ${number(item.need)}</button>`).join('')}</div>` : ''}
-    <div class="detail-role"><h3>${html(role.title)}</h3>${rolePriority(role)}${role.superFocus ? focusBadge : ''}</div>
-    <dl class="detail-grid">
-      ${formatMetric('Недобор', `${number(role.need)} чел.`)}${formatMetric('Кандидатов в работе', role.inProgress === null ? UNKNOWN : number(role.inProgress))}
-      ${formatMetric('Покрытие воронкой', role.coverage || UNKNOWN)}${formatMetric('Принимает несовершеннолетних', role.nsv === null ? UNKNOWN : role.nsv ? 'Да' : 'Нет')}
-      ${formatMetric('Ориентир дохода', incomeText(role.income))}${formatMetric('Средний доход за заказ', cleanUnits(role.perOrder, ' ₽'))}
-      ${formatMetric('Пробег', cleanUnits(role.distance, ' км/день'))}${formatMetric('Возраст', ageText(role.age))}
-      ${formatMetric('Минимальная смена', role.shift === null ? UNKNOWN : `${number(role.shift)} ч.`)}
-    </dl>
-    ${role.income ? '<p class="income-note">Доход ориентировочный и зависит от фактически выполненных заказов.</p>' : ''}
-    <div class="detail-block"><strong>График</strong><p>${schedule || UNKNOWN}${format ? `\nФормат: ${format}` : ''}</p>${role.scheduleRaw ? `<details><summary>Исходный график HRM</summary><p>${html(role.scheduleRaw)}</p></details>` : ''}</div>
-    <div class="detail-block"><strong>Дополнительные условия</strong><p>${html(role.conditions || UNKNOWN)}</p></div>
+    ${distance === null ? '' : `<p class="distance-detail">${number(Math.round(distance * 10) / 10)} км по прямой от выбранного места${radius && distance > radius ? ' · за пределами радиуса' : ''}</p>`}
+    ${hint ? `<p class="address-state">${hint}${candidate ? ' · расстояние неизвестно' : ''}</p>` : ''}
+    ${point.roles.length > 1 ? `<p class="roles-label">Роли на ТТ</p><div class="role-navigation" role="group" aria-label="Выберите роль">${point.roles.map(item => `<button type="button" data-role="${html(item.id)}" aria-pressed="${item.id === role.id}" class="button"><span>${html(item.title)}</span>${matching.includes(item) ? '' : '<small>Вне фильтров</small>'}</button>`).join('')}</div>` : ''}
+    <section class="selected-role" aria-label="Условия выбранной роли" aria-live="polite">
+      <p class="selected-role-label">Условия выбранной роли</p>
+      <div class="detail-role"><h3>${html(role.title)}</h3>${rolePriority(role)}${role.superFocus ? focusBadge : ''}</div>
+      ${renderRoleConditions(role)}
+      ${shiftNote}
+      <p class="role-need">Недобор по выбранной роли — <strong>${number(role.need)} чел.</strong></p>
+      <dl class="detail-grid">
+        ${formatMetric('Кандидатов в работе', role.inProgress === null ? UNKNOWN : number(role.inProgress))}
+        ${formatMetric('Покрытие воронкой', role.coverage || UNKNOWN)}
+        ${formatMetric('Принимает несовершеннолетних', role.nsv === null ? UNKNOWN : role.nsv ? 'Да' : 'Нет')}
+        ${formatMetric('Возраст', ageText(role.age))}
+        ${formatMetric('Ориентир дохода', incomeText(role.income))}${formatMetric('Средний доход за заказ', cleanUnits(role.perOrder, ' ₽'))}
+        ${formatMetric('Пробег', cleanUnits(role.distance, ' км/день'))}
+        ${role.schedule.includes('full') ? formatMetric('Формат', 'Полная занятость') : ''}
+      </dl>
+      ${role.income ? '<p class="income-note">Доход ориентировочный и зависит от фактически выполненных заказов.</p>' : ''}
+      ${role.scheduleRaw ? `<details class="detail-block"><summary>Исходный график HRM</summary><p>${html(role.scheduleRaw)}</p></details>` : ''}
+      <details class="detail-block"><summary>Исходные условия роли в HRM</summary><p>${html(role.conditions || 'Условия не подтверждены')}</p></details>
+    </section>
     <div class="detail-actions"><button type="button" class="button primary" data-copy>${icon('copy')}Скопировать данные ТТ</button>${url ? `<a class="button" href="${html(url)}" target="_blank" rel="noopener noreferrer">${icon('route')}Построить маршрут</a>` : ''}</div>`;
 }
 
@@ -462,7 +536,7 @@ async function refreshData(manual = false) {
   }
 }
 
-for (const key of ['day', 'evening', 'night']) $('schedule').append(new Option(SCHEDULE[key], key));
+for (const key of periods) $('schedule').append(new Option(SCHEDULE[key], key));
 $('transport').addEventListener('click', event => {
   const button = event.target.closest('[data-transport]');
   if (!button) return;
@@ -476,7 +550,11 @@ $('city-search').addEventListener('click', () => { if ($('city-options').hidden)
 $('city-search').addEventListener('input', () => openCities($('city-search').value));
 $('city-search').addEventListener('blur', closeCities);
 $('city-search').addEventListener('keydown', event => {
-  if (event.key === 'Escape') { closeCities(); return; }
+  if (event.key === 'Escape' && !$('city-options').hidden) {
+    event.preventDefault();
+    closeCities();
+    return;
+  }
   if (event.key === 'Enter') {
     event.preventDefault();
     const city = cityOptions[optionIndex] ?? (cityOptions.length === 1 ? cityOptions[0] : cityOptions.find(value => normalize(value) === normalize($('city-search').value)));
@@ -504,20 +582,27 @@ function scheduleRender(event) {
   inputTimer = setTimeout(() => render(true), 120);
 }
 $('filters').addEventListener('input', scheduleRender);
-$('search').addEventListener('input', scheduleRender);
+function showLookupPoint(id) {
+  $('store-lookup').close();
+  showPoint(id);
+}
+
 $('search').addEventListener('keydown', event => {
   if (event.key !== 'Enter') return;
   const id = normalize($('search').value).replace(/^тт /u, '');
   if (!/^\d+$/.test(id) || !data.points.some(point => point.id === id)) return;
   event.preventDefault();
   closeStoreLookup();
-  showPoint(id);
+  showLookupPoint(id);
 });
 
 function selectCandidate(item) {
   candidate = item;
+  previewPointId = undefined;
+  movedByUser = false;
   $('candidate-label').textContent = [item.label, item.area, item.kind].filter(Boolean).join(' · ');
   $('nearby-panel').hidden = false;
+  $('clear-candidate').hidden = false;
   if (map) {
     candidateMarker?.remove();
     candidateMarker = L.marker(item.xy, {title: 'Местоположение кандидата', alt: 'Местоположение кандидата', zIndexOffset: 1000,
@@ -538,8 +623,11 @@ const closeStoreLookup = setupLookup({input: $('search'), options: $('store-opti
     const exact = terms.length === 1 && data.points.find(point => point.id === terms[0]);
     return (exact ? [exact] : data.points.filter(point => terms.every(term => point.searchText.includes(term))).slice(0, 7))
       .map(point => ({id: point.id, label: `ТТ №${point.id}`, area: point.address || point.city}));
-  }, onSelect: item => showPoint(item.id), empty: 'ТТ не найдена.'});
-$('radius').addEventListener('change', () => render(true));
+  }, onSelect: item => showLookupPoint(item.id), empty: 'ТТ не найдена.'});
+$('radius').addEventListener('change', () => {
+  render(true);
+  if (!movedByUser) updateCity(true);
+});
 $('clear-candidate').addEventListener('click', () => {
   candidate = null;
   candidateMarker?.remove();
@@ -547,6 +635,7 @@ $('clear-candidate').addEventListener('click', () => {
   closeCandidateLookup();
   $('candidate-search').value = '';
   $('nearby-panel').hidden = true;
+  $('clear-candidate').hidden = true;
   cityZoomed = '';
   movedByUser = false;
   if (map && view === 'map' && !selectedCity) mapOverview();
@@ -569,27 +658,39 @@ $('refresh').addEventListener('click', () => refreshData(true));
 $('map-view').addEventListener('click', () => chooseView('map'));
 $('list-view').addEventListener('click', () => chooseView('list'));
 $('nearby-missing').addEventListener('click', () => {
-  chooseView('list');
-  const title = $('without-coordinates-title');
-  title.focus({preventScroll: true});
-  title.scrollIntoView({block: 'nearest'});
+  if (mobile.matches) chooseView('list');
+  scrollToResult($('without-coordinates-title'), true);
 });
-$('open-filters').addEventListener('click', () => setFiltersOpen(true));
-for (const id of ['close-filters', 'filter-backdrop', 'apply-filters']) $(id).addEventListener('click', () => setFiltersOpen(false));
-mobile.addEventListener('change', () => { if (!mobile.matches) setFiltersOpen(false); });
-document.addEventListener('keydown', event => { if (event.key === 'Escape' && !$('filter-backdrop').hidden && $('city-options').hidden) setFiltersOpen(false); });
+$('back-to-nearby').addEventListener('click', () => scrollToResult($('nearby-results-title'), true));
+$('open-filters').addEventListener('click', () => $('filter-panel').showModal());
+for (const id of ['close-filters', 'apply-filters']) {
+  $(id).addEventListener('click', () => $('filter-panel').close());
+}
+$('open-store-lookup').addEventListener('click', () => {
+  $('search').value = '';
+  $('store-lookup').showModal();
+  $('search').focus();
+});
+$('close-store-lookup').addEventListener('click', () => $('store-lookup').close());
+$('store-lookup').addEventListener('close', closeStoreLookup);
 $('recenter').addEventListener('click', () => { movedByUser = false; updateCity(true); });
-$('result-body').addEventListener('click', event => {
-  const id = event.target.closest('[data-point]')?.dataset.point;
-  if (id) showPoint(id);
-});
-$('more').addEventListener('click', () => { visible += pageSize; renderResults(); });
-$('more-without-coordinates').addEventListener('click', () => {
-  const firstNewPoint = withoutCoordinates[visibleWithoutCoordinates];
-  if (!firstNewPoint) return;
-  visibleWithoutCoordinates += pageSize;
+for (const container of ['result-body', 'map-preview']) {
+  $(container).addEventListener('click', event => {
+    const id = event.target.closest('[data-point]')?.dataset.point;
+    if (id) showPoint(id);
+  });
+}
+function revealPage(group, firstNewPoint) {
   renderResults();
-  $('without-coordinates-results').querySelector(`[data-point="${firstNewPoint.id}"]`)?.focus();
+  if (firstNewPoint) $(group).querySelector(`[data-point="${firstNewPoint.id}"] [data-open-point]`)?.focus();
+}
+$('more').addEventListener('click', () => {
+  visible += pageSize;
+  revealPage('results', filtered[visible - pageSize]);
+});
+$('more-without-coordinates').addEventListener('click', () => {
+  visibleWithoutCoordinates += pageSize;
+  revealPage('without-coordinates-results', withoutCoordinates[visibleWithoutCoordinates - pageSize]);
 });
 $('close-detail').addEventListener('click', () => $('detail').close());
 $('detail').addEventListener('click', event => {
@@ -615,6 +716,9 @@ if (window.L?.markerClusterGroup) {
     iconCreateFunction: item => L.divIcon({className: 'map-cluster-wrap', iconSize: [44, 44], html: `<span class="map-cluster">${item.getChildCount()}</span>`}),
   }).addTo(map);
   map.on('dragstart', () => { movedByUser = true; });
+  new ResizeObserver(() => {
+    if (view === 'map') map.invalidateSize({pan: false});
+  }).observe($('map-frame'));
 } else {
   chooseView('list');
 }
