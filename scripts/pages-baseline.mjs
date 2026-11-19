@@ -1,4 +1,4 @@
-import {lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile} from 'node:fs/promises';
 import {resolve, join, dirname} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {pathToFileURL} from 'node:url';
@@ -11,15 +11,38 @@ const site = 'https://nik199494-star.github.io/vv-agent-map/';
 const optional = new Set(['.nojekyll', 'publication.json', 'rollback.json', 'rollback.js', 'release-cache.js']);
 const names = assets;
 const hash = /^[a-f0-9]{64}$/;
+const transientCodes = new Set([
+  'AbortError', 'TimeoutError', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET',
+]);
+
+function describeTransport(error) {
+  const nested = error?.cause?.errors;
+  const causes = [error, error?.cause, ...(Array.isArray(nested) ? nested : [])].filter(Boolean);
+  const codes = [...new Set(causes.flatMap(cause => [cause.code, cause.name])
+    .filter(value => typeof value === 'string' && (/^[A-Z][A-Z0-9_]+$/.test(value) || transientCodes.has(value))))];
+  return {codes, retry: codes.some(code => transientCodes.has(code))};
+}
 
 async function readPublished(name, fetcher, wait) {
+  const label = name || '/';
   for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await fetcher(new URL(name, site), {
-      redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(20_000),
-    });
+    let response;
+    try {
+      response = await fetcher(new URL(name, site), {
+        redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(60_000),
+      });
+      if (response.ok) return Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      const {codes, retry} = describeTransport(error);
+      if (!retry || attempt === 2) {
+        throw Error('Сетевая ошибка Pages для ' + label + (codes.length ? ' (' + codes.join(', ') + ')' : '') + '.');
+      }
+      await wait(250 * 2 ** attempt);
+      continue;
+    }
     if (response.status === 404 && optional.has(name)) return null;
-    if (response.ok) return Buffer.from(await response.arrayBuffer());
-    if (response.status !== 503 || attempt === 2) throw Error('Pages вернул HTTP ' + response.status + ' для ' + name + '.');
+    if (response.status !== 503 || attempt === 2) throw Error('Pages вернул HTTP ' + response.status + ' для ' + label + '.');
     const seconds = Number(response.headers.get('retry-after'));
     await wait(Math.min(5000, seconds > 0 ? seconds * 1000 : 250 * 2 ** attempt));
   }
@@ -99,9 +122,14 @@ export async function capturePagesBaseline(fetcher = fetch, wait = delay) {
   return {files, manifest};
 }
 
-export async function readStoredBaseline(folder) {
+export async function readStoredBaseline(folder, now = Date.now()) {
   const manifest = JSON.parse(await readFile(join(folder, 'baseline-manifest.json'), 'utf8'));
   assertManifest(manifest);
+  const expected = new Set(['baseline-manifest.json', ...names.filter(name => manifest[name] !== null)]);
+  const entries = await readdir(folder);
+  if (entries.length !== expected.size || entries.some(name => !expected.has(name))) {
+    throw Error('Состав архива не совпадает с манифестом.');
+  }
   const files = Object.fromEntries(await Promise.all(names.map(async name => {
     try { return [name, await readFile(join(folder, name))]; }
     catch (error) {
@@ -110,14 +138,14 @@ export async function readStoredBaseline(folder) {
     }
   })));
   verifyFiles(files, manifest);
-  return {files, manifest};
+  return {files, manifest, ...assertReleaseFiles(files, manifest, now)};
 }
 
 export async function savePagesBaseline(folder, fetcher = fetch, wait = delay) {
   await writeVerifiedBackup(folder, await capturePagesBaseline(fetcher, wait));
 }
 
-async function writeVerifiedBackup(folder, {files, manifest}) {
+async function writeVerifiedBackup(folder, {files, manifest}, now = Date.now()) {
   verifyFiles(files, manifest);
   const target = resolve(folder);
   const parent = dirname(target);
@@ -135,7 +163,7 @@ async function writeVerifiedBackup(folder, {files, manifest}) {
       if (bytes !== null) await writeFile(join(staging, name), bytes, {flag: 'wx'});
     }
     await writeFile(join(staging, 'baseline-manifest.json'), JSON.stringify(manifest, null, 2) + '\n', {flag: 'wx'});
-    await readStoredBaseline(staging);
+    await readStoredBaseline(staging, now);
     await rename(staging, target);
   } finally {
     await rm(staging, {recursive: true, force: true});
@@ -151,9 +179,8 @@ export function createRollbackReceipt(manifest, failed, now = new Date()) {
 }
 
 export async function prepareRollback(archive, failedFile, folder, now = new Date()) {
-  const {files, manifest} = await readStoredBaseline(archive);
+  const {files, manifest, snapshot: target, protectedClient} = await readStoredBaseline(archive, now.getTime());
   const failed = validateSnapshot(toJson(await readFile(failedFile)));
-  const {snapshot: target, protectedClient} = assertReleaseFiles(files, manifest, now.getTime());
   if (!protectedClient) {
     throw Error('Предыдущий выпуск должен поддерживать откат из прогретого кеша.');
   }
@@ -163,12 +190,11 @@ export async function prepareRollback(archive, failedFile, folder, now = new Dat
   files['rollback.json'] = fromJson(createRollbackReceipt(manifest, failed, now));
   manifest['rollback.json'] = sha256(files['rollback.json']);
   assertReleaseFiles(files, manifest, now.getTime());
-  await writeVerifiedBackup(folder, {files, manifest});
+  await writeVerifiedBackup(folder, {files, manifest}, now.getTime());
 }
 
 export async function prepareRelease(archive, demandFile, coordinatesFile, folder, now = new Date()) {
-  const {files, manifest} = await readStoredBaseline(archive);
-  const {snapshot: previous, rollback, protectedClient} = assertReleaseFiles(files, manifest, now.getTime());
+  const {files, manifest, snapshot: previous, rollback, protectedClient} = await readStoredBaseline(archive, now.getTime());
   if (!protectedClient) throw Error('Сначала сохраните выпуск с поддержкой отката.');
 
   const demand = await readFile(demandFile);
@@ -187,7 +213,7 @@ export async function prepareRelease(archive, demandFile, coordinatesFile, folde
     ...Object.fromEntries(Object.entries(releaseFiles).map(([key, name]) => [key, manifest[name]]))});
   manifest['publication.json'] = sha256(files['publication.json']);
   assertReleaseFiles(files, manifest, now.getTime());
-  await writeVerifiedBackup(folder, {files, manifest});
+  await writeVerifiedBackup(folder, {files, manifest}, now.getTime());
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
@@ -200,13 +226,17 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     } else if (command === 'verify' && args.length === 1) {
       await verifyPagesBaseline(JSON.parse(await readFile(args[0], 'utf8')));
       console.log('Все файлы Pages совпали с манифестом.');
+    } else if (command === 'verify-local' && args.length === 1) {
+      const {manifest, protectedClient} = await readStoredBaseline(args[0]);
+      console.log(JSON.stringify({files: Object.values(manifest).filter(Boolean).length,
+        absent: Object.keys(manifest).filter(name => manifest[name] === null), protectedClient}));
     } else if (command === 'restore' && args.length === 3) {
       await prepareRollback(...args);
       console.log('Пакет восстановления проверен и сохранён локально.');
     } else if (command === 'stage' && args.length === 4) {
       await prepareRelease(...args);
       console.log('Пакет нового выпуска проверен и сохранён локально.');
-    } else throw Error('Команды: capture [папка], verify манифест, stage архив demand.json coordinates.json папка, restore архив отменяемый-demand.json папка.');
+    } else throw Error('Команды: capture [папка], verify манифест, verify-local архив, stage архив demand.json coordinates.json папка, restore архив отменяемый-demand.json папка.');
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

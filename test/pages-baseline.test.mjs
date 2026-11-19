@@ -101,9 +101,35 @@ test('two 503 responses recover, but a persistent error leaves no published back
     }, async () => {});
     const saved = await readStoredBaseline(valid);
     assert.equal(saved.manifest['source.js'], sha256(saved.files['source.js']));
+    await writeFile(join(valid, 'unexpected.txt'), 'not in the manifest');
+    await assert.rejects(readStoredBaseline(valid), /Состав архива/);
+    await rm(join(valid, 'unexpected.txt'));
     await writeFile(join(valid, 'source.js'), 'migration bypass');
     await assert.rejects(readStoredBaseline(valid), /source\.js/);
   } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+test('a broken response body retries the whole GET, while a certificate failure stops immediately', async () => {
+  const {fetcher} = published();
+  let calls = 0;
+  const delays = [];
+  const capture = await capturePagesBaseline(async url => {
+    if (url.pathname.endsWith('/demand.json') && calls++ === 0) {
+      return {ok: true, arrayBuffer() {
+        throw new TypeError('interrupted response', {cause: {code: 'UND_ERR_SOCKET'}});
+      }};
+    }
+    return fetcher(url);
+  }, async ms => delays.push(ms));
+  assert.equal(calls, 3);
+  assert.deepEqual(delays, [250]);
+  assert.equal(capture.manifest['demand.json'], sha256(capture.files['demand.json']));
+
+  let waits = 0;
+  await assert.rejects(capturePagesBaseline(async () => {
+    throw new TypeError('certificate subject', {cause: {code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'}});
+  }, async () => { waits++; }), /Сетевая ошибка Pages .*UNABLE_TO_VERIFY_LEAF_SIGNATURE/);
+  assert.equal(waits, 0);
 });
 
 test('restoration from the verified archive preserves every archived byte other than the new receipt', async () => {
