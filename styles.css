@@ -81,7 +81,7 @@ input::placeholder { opacity: 1; color: #63786d; }
 .nearby-origin p { margin: 0; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; }
 .nearby-radius { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .nearby-radius select { min-height: 34px; padding: 0 7px; background: white; border: 1px solid #9ec3a8; border-radius: 7px; color: var(--text); }
-.nearby-missing { color: #835c0e; }
+.nearby-missing { text-align: left; white-space: normal; text-decoration: underline; text-underline-offset: .17em; }
 .check-field { display: flex; align-items: flex-start; gap: 6px; padding: 4px 0; font-size: 12px; color: var(--text); }
 .check-field input { accent-color: #1b704d; }
 .field > input[type="search"] { width: 100%; min-height: 35px; padding: 0 7px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: white; }
@@ -153,6 +153,10 @@ legend { margin: 0 0 6px; }
 .result-heading-icon { color: var(--green); }
 .result-scroll { min-height: 0; overflow: auto; flex: 1; padding: 11px; scrollbar-width: thin; scrollbar-color: #cddbd2 transparent; }
 .results { display: grid; gap: 8px; }
+.result-group-title { margin: 0 0 7px; font-size: 14px; line-height: 1.3; }
+.result-group-title:focus { outline-offset: 1px; }
+.result-group { margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--line); }
+.result-group p { margin: 0 0 9px; color: var(--muted); font-size: 12px; }
 .point-card { display: flex; flex-direction: column; width: 100%; min-width: 0; gap: 7px; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: white; text-align: left; box-shadow: 0 1px 3px #1b422a08; }
 .point-card:hover { border-color: #91bda5; background: #f9fdfb; box-shadow: 0 2px 7px #1b422a12; }
 .point-title { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
@@ -221,6 +225,8 @@ legend { margin: 0 0 6px; }
   .topbar { padding-inline: 16px; grid-template-columns: max-content minmax(0, 1.3fr) minmax(0, 1fr) max-content; gap: 11px; }
   .overview { gap: 12px; }
   .metric-icon { width: 30px; height: 30px; flex-basis: 30px; }
+  .nearby-missing { min-height: 44px; }
+  .result-group .more { min-height: 44px; white-space: normal; }
 }
 @media (max-width: 720px) {
   .topbar { height: auto; grid-template-columns: 1fr max-content; gap: 9px; padding: 10px 13px; }

@@ -38,8 +38,8 @@ let locations = {coordinates: {}, cities: {}};
 let currentSnapshot = null;
 let updateError = false;
 let filtered = [];
+let withoutCoordinates = [];
 let candidate = null;
-let missingNearby = 0;
 let candidateMarker;
 let selectedCity = '';
 let cityOptions = [];
@@ -47,7 +47,8 @@ let optionIndex = -1;
 let map, cluster, tiles, tileKey = '', markerKey = '', tileBroken = false;
 let movedByUser = false, cityZoomed = '';
 let view = 'map';
-let visible = 45;
+const pageSize = 45;
+let visible = pageSize, visibleWithoutCoordinates = pageSize;
 let selectedPoint, selectedRole;
 let inputTimer, toastTimer, fetching = false;
 const selectedTransports = new Set();
@@ -113,54 +114,71 @@ function addressState(point) {
   return point.location.xy ? '' : locationReasons[point.location.reason] || locationReasons.pending;
 }
 
-function renderResults() {
-  const results = $('results');
-  $('result-body').setAttribute('aria-busy', String(data.status === 'loading'));
-  $('more').hidden = filtered.length <= visible;
-  if (!filtered.length) {
-    const filters = getFilters();
-    const invalidRange = filters.incomeFrom !== null && filters.incomeTo !== null && filters.incomeFrom > filters.incomeTo;
-    const [title, description] = data.status === 'loading'
-      ? ['Загружаем потребность', 'Торговые точки появятся автоматически.']
-      : !data.sourceDate
-        ? ['Потребность временно недоступна', 'Попробуйте открыть карту позже.']
-        : invalidRange
-          ? ['Проверьте диапазон дохода', 'Нижняя граница должна быть меньше верхней или равна ей.']
-          : candidate ? ['Подходящих ТТ рядом не найдено', 'Увеличьте радиус или измените фильтры.']
-          : ['Подходящих ТТ не найдено', data.points.length ? 'Измените поиск или сбросьте фильтры.' : 'В листе пока нет ТТ с положительным недобором.'];
-    results.innerHTML = `<div class="empty">${icon('search')}<h3>${title}</h3><p>${description}</p></div>`;
-    return;
-  }
-  results.innerHTML = filtered.slice(0, visible).map(point => {
-    const role = point.matched[0];
-    const other = point.matched.length - 1;
-    const loc = addressState(point);
-    return `<button type="button" class="point-card" data-point="${point.id}">
+function renderPointCard(point) {
+  const role = point.matched[0];
+  const other = point.matched.length - 1;
+  const loc = addressState(point);
+  return `<button type="button" class="point-card" data-point="${point.id}">
       <span class="point-title"><strong>ТТ №${point.id}</strong><span class="point-badges">${point.matched.some(item => item.superFocus) ? focusBadge : ''}${rolePriority(role)}</span></span>
       <span class="point-address">${html(point.address || point.city || 'Адрес уточняется')}</span>
       <span class="point-role">${icon(roleIcon(role.transport))}<span>${html(role.title)}</span>${other ? `<span class="other-count" aria-label="Других подходящих ролей: ${other}">+${other}</span>` : ''}</span>
       ${loc ? `<span class="address-state ${point.location.state}">${loc}</span>` : ''}
       <span class="point-bottom"><span>Недобор <strong>${number(point.need)}</strong></span>${role.income ? `<strong class="point-income" title="Ориентир дохода">≈ ${incomeText(role.income)}</strong>` : ''}${point.distance !== undefined ? `<strong class="point-distance" title="По прямой">${number(Math.round(point.distance * 10) / 10)} км</strong>` : ''}</span>
     </button>`;
-  }).join('');
+}
+
+function renderResults() {
+  const results = $('results');
+  $('result-body').setAttribute('aria-busy', String(data.status === 'loading'));
+  $('more').hidden = filtered.length <= visible;
+  $('nearby-results-title').hidden = !candidate || (!filtered.length && !withoutCoordinates.length);
+  $('nearby-results-title').textContent = `Ближайшие ТТ · ${number(filtered.length)}`;
+  $('without-coordinates').hidden = !withoutCoordinates.length;
+  $('without-coordinates-title').textContent = `ТТ без координат · ${number(withoutCoordinates.length)}`;
+  $('without-coordinates-results').innerHTML = withoutCoordinates.slice(0, visibleWithoutCoordinates).map(renderPointCard).join('');
+  $('more-without-coordinates').hidden = withoutCoordinates.length <= visibleWithoutCoordinates;
+
+  if (filtered.length) {
+    results.innerHTML = filtered.slice(0, visible).map(renderPointCard).join('');
+    return;
+  }
+
+  const filters = getFilters();
+  const invalidRange = filters.incomeFrom !== null && filters.incomeTo !== null && filters.incomeFrom > filters.incomeTo;
+  const [title, description] = data.status === 'loading'
+    ? ['Загружаем потребность', 'Торговые точки появятся автоматически.']
+    : !data.sourceDate
+      ? ['Потребность временно недоступна', 'Попробуйте открыть карту позже.']
+      : invalidRange
+        ? ['Проверьте диапазон дохода', 'Нижняя граница должна быть меньше верхней или равна ей.']
+        : withoutCoordinates.length
+          ? ['ТТ с известным расстоянием не найдено', 'Увеличьте радиус или посмотрите ТТ без координат ниже.']
+          : candidate ? ['Подходящих ТТ рядом не найдено', 'Увеличьте радиус или измените фильтры.']
+          : ['Подходящих ТТ не найдено', data.points.length ? 'Измените поиск или сбросьте фильтры.' : 'В листе пока нет ТТ с положительным недобором.'];
+  results.innerHTML = `<div class="empty">${icon('search')}<h3>${title}</h3><p>${description}</p></div>`;
 }
 
 function renderMetrics(filters) {
-  $('count').textContent = data.sourceDate ? number(filtered.length) : '—';
-  $('total').textContent = data.sourceDate ? number(filtered.reduce((sum, point) => sum + point.need, 0)) : '—';
+  const resultCount = filtered.length + withoutCoordinates.length;
+  const need = [...filtered, ...withoutCoordinates].reduce((sum, point) => sum + point.need, 0);
+  $('count').textContent = data.sourceDate ? number(resultCount) : '—';
+  $('total').textContent = data.sourceDate ? number(need) : '—';
   const mapped = filtered.filter(point => point.location.xy).length;
   const without = filtered.length - mapped;
   $('view-title').textContent = candidate ? 'ТТ рядом' : 'Торговые точки';
-  $('results-title').textContent = candidate ? 'Ближайшие ТТ' : 'Подходящие ТТ';
-  $('nearby-missing').hidden = !candidate || !missingNearby;
-  $('nearby-missing').textContent = `Без координат среди подходящих по фильтрам · ${number(missingNearby)}`;
+  $('results-title').textContent = candidate ? 'Подбор по адресу' : 'Подходящие ТТ';
+  $('nearby-missing').hidden = !withoutCoordinates.length;
+  $('nearby-missing').textContent = `ТТ без координат · ${number(withoutCoordinates.length)}`;
   const empty = data.status === 'loading' ? 'Загрузка…' : 'Временно недоступно';
-  $('map-count').textContent = data.sourceDate ? (view === 'map' ? `На карте ${number(mapped)} из ${number(filtered.length)}` : `Найдено ТТ · ${number(filtered.length)}`) : empty;
-  $('result-meta').textContent = data.sourceDate ? (candidate ? 'По расстоянию по прямой' : without ? `Без маркера · ${number(without)}` : `Всего · ${number(filtered.length)}`) : empty;
+  const viewCount = candidate
+    ? `${$('radius').value ? 'В радиусе по прямой' : 'С известным расстоянием'} · ${number(mapped)}`
+    : view === 'map' ? `На карте ${number(mapped)} из ${number(resultCount)}` : `Найдено ТТ · ${number(resultCount)}`;
+  $('map-count').textContent = data.sourceDate ? viewCount : empty;
+  $('result-meta').textContent = data.sourceDate ? (!candidate && without ? `Без маркера · ${number(without)}` : `Всего · ${number(resultCount)}`) : empty;
   const count = [filters.city, filters.priority, filters.superFocus, filters.need, filters.schedule, filters.format, filters.shift, filters.age, filters.conditions, filters.incomeFrom ?? filters.incomeTo].filter(value => value !== null && value !== '').length + filters.transport.length + Number(filters.minor);
   $('filter-count').textContent = count;
   $('filter-count').hidden = !count;
-  $('apply-filters').textContent = data.sourceDate ? `Показать ТТ · ${number(filtered.length)}` : 'Показать ТТ';
+  $('apply-filters').textContent = data.sourceDate ? `Показать ТТ · ${number(resultCount)}` : 'Показать ТТ';
   $('recenter').disabled = !map;
 }
 
@@ -169,7 +187,7 @@ function renderMapMessage() {
     : tileBroken ? 'Подложка карты недоступна. Попробуйте изменить масштаб или открыть список.'
     : data.status === 'loading' ? 'Загружаем потребность…'
     : !data.sourceDate ? 'Потребность временно недоступна.'
-    : !filtered.length ? 'Подходящих точек нет.'
+    : !filtered.length ? (withoutCoordinates.length ? 'ТТ без координат доступны в списке.' : 'Подходящих точек нет.')
     : !filtered.some(point => point.location.xy) ? 'Для этих ТТ пока нет подтверждённых координат. Откройте список.' : '';
   $('map-message').hidden = !message;
   $('map-message').textContent = message;
@@ -248,10 +266,14 @@ function renderMap() {
 function render(resetList = false) {
   const filters = getFilters();
   const matching = findPoints(data.points, filters);
-  missingNearby = candidate ? matching.filter(point => !point.location.xy).length : 0;
+  // Keep the priority, need and ID order already established by findPoints.
+  withoutCoordinates = candidate ? matching.filter(point => !point.location.xy) : [];
   filtered = nearbyPoints(matching, candidate?.xy, $('radius').value ? Number($('radius').value) : null);
   renderMetrics(filters);
-  if (resetList) { visible = 45; $('result-body').scrollTop = 0; }
+  if (resetList) {
+    visible = visibleWithoutCoordinates = pageSize;
+    $('result-body').scrollTop = 0;
+  }
   renderResults();
   renderMap();
 }
@@ -307,8 +329,13 @@ function setFiltersOpen(open) {
 
 function formatMetric(label, value) { return `<div><dt>${label}</dt><dd>${html(value)}</dd></div>`; }
 
+function findResultPoint(id) {
+  return filtered.find(point => point.id === id) ?? withoutCoordinates.find(point => point.id === id)
+    ?? data.points.find(point => point.id === id);
+}
+
 function showPoint(id) {
-  const point = filtered.find(item => item.id === id) ?? data.points.find(item => item.id === id);
+  const point = findResultPoint(id);
   if (!point) return;
   selectedPoint = point;
   selectedRole = point.matched?.[0] ?? point.roles[0];
@@ -387,7 +414,7 @@ function displaySnapshot(snapshot) {
   updateSource();
   render(true);
   if ($('detail').open) {
-    const point = filtered.find(item => item.id === selectedPoint.id) ?? data.points.find(item => item.id === selectedPoint.id);
+    const point = findResultPoint(selectedPoint.id);
     if (!point) { $('detail').close(); return; }
     selectedPoint = point;
     selectedRole = point.roles.find(role => role.title === selectedRole.title) ?? point.matched?.[0] ?? point.roles[0];
@@ -534,16 +561,29 @@ $('reset').addEventListener('click', () => {
 $('refresh').addEventListener('click', () => refreshData(true));
 $('map-view').addEventListener('click', () => chooseView('map'));
 $('list-view').addEventListener('click', () => chooseView('list'));
+$('nearby-missing').addEventListener('click', () => {
+  chooseView('list');
+  const title = $('without-coordinates-title');
+  title.focus({preventScroll: true});
+  title.scrollIntoView({block: 'nearest'});
+});
 $('open-filters').addEventListener('click', () => setFiltersOpen(true));
 for (const id of ['close-filters', 'filter-backdrop', 'apply-filters']) $(id).addEventListener('click', () => setFiltersOpen(false));
 mobile.addEventListener('change', () => { if (!mobile.matches) setFiltersOpen(false); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && !$('filter-backdrop').hidden && $('city-options').hidden) setFiltersOpen(false); });
 $('recenter').addEventListener('click', () => { movedByUser = false; updateCity(true); });
-$('results').addEventListener('click', event => {
+$('result-body').addEventListener('click', event => {
   const id = event.target.closest('[data-point]')?.dataset.point;
   if (id) showPoint(id);
 });
-$('more').addEventListener('click', () => { visible += 45; renderResults(); });
+$('more').addEventListener('click', () => { visible += pageSize; renderResults(); });
+$('more-without-coordinates').addEventListener('click', () => {
+  const firstNewPoint = withoutCoordinates[visibleWithoutCoordinates];
+  if (!firstNewPoint) return;
+  visibleWithoutCoordinates += pageSize;
+  renderResults();
+  $('without-coordinates-results').querySelector(`[data-point="${firstNewPoint.id}"]`)?.focus();
+});
 $('close-detail').addEventListener('click', () => $('detail').close());
 $('detail').addEventListener('click', event => {
   const button = event.target.closest('[data-role]');

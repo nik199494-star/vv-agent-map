@@ -88,7 +88,11 @@
 
       <section class="map-panel panel" aria-labelledby="view-title">
         <div class="panel-head view-head">
-          <div class="view-title"><h2 id="view-title">Торговые точки</h2><p id="map-count">Загрузка…</p><p class="nearby-missing" id="nearby-missing" hidden></p></div>
+          <div class="view-title">
+            <h2 id="view-title">Торговые точки</h2>
+            <p id="map-count">Загрузка…</p>
+            <button class="text-button nearby-missing" id="nearby-missing" type="button" aria-controls="without-coordinates" hidden></button>
+          </div>
           <button class="button mobile-filter" id="open-filters" type="button" aria-label="Фильтры" aria-controls="filter-panel" aria-expanded="false"><span data-icon="filter"></span><span class="mobile-filter-label">Фильтры</span><span id="filter-count" hidden></span></button>
           <div class="view-switch" role="group" aria-label="Вид результатов">
             <button id="map-view" type="button" aria-pressed="true" aria-label="Карта" title="Карта"><span data-icon="map"></span><span class="view-label">Карта</span></button>
@@ -105,7 +109,17 @@
 
       <section class="result-panel panel" aria-labelledby="results-title">
         <div class="panel-head results-head"><div><h2 id="results-title">Подходящие ТТ</h2><p id="result-meta">Загрузка…</p></div><span class="result-heading-icon" data-icon="list"></span></div>
-        <div id="result-body" class="result-scroll" aria-busy="true"><div class="results" id="results"></div><button type="button" id="more" class="button more" hidden>Показать ещё</button></div>
+        <div id="result-body" class="result-scroll" aria-busy="true">
+          <h3 class="result-group-title" id="nearby-results-title" hidden></h3>
+          <div class="results" id="results"></div>
+          <button type="button" id="more" class="button more" hidden>Показать ещё</button>
+          <section class="result-group" id="without-coordinates" aria-labelledby="without-coordinates-title" hidden>
+            <h3 class="result-group-title" id="without-coordinates-title" tabindex="-1"></h3>
+            <p id="without-coordinates-description">Расстояние до этих ТТ пока неизвестно</p>
+            <div class="results" id="without-coordinates-results"></div>
+            <button type="button" class="button more" id="more-without-coordinates" hidden>Показать ещё ТТ без координат</button>
+          </section>
+        </div>
       </section>
     </div>
 
