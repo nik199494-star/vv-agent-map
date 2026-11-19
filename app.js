@@ -1,5 +1,6 @@
 import {UNKNOWN, TRANSPORT, SCHEDULE, findPoints, normalize, rank, tone, number, incomeText, ageText} from './model.js';
-import {assertFreshEnough, fetchSnapshot, isOutdated} from './source.js';
+import {isOutdated} from './source.js';
+import {fetchRelease, selectRelease} from './rollback.js';
 import {readSnapshot, saveSnapshot} from './cache.js';
 import {attachLocations, findCityCenter, loadLocations, locationReasons} from './locations.js';
 import {distanceKm, nearbyPoints, searchCandidate} from './nearby.js';
@@ -35,7 +36,7 @@ const defaultState = {status: 'loading', points: [], priorities: [], cities: [],
   tiles: {url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'}};
 let data = defaultState;
 let locations = {coordinates: {}, cities: {}};
-let currentSnapshot = null;
+let currentRelease = null;
 let updateError = false;
 let filtered = [];
 let candidate = null;
@@ -377,8 +378,10 @@ async function copyPoint(button) {
   }
 }
 
-function displaySnapshot(snapshot) {
-  currentSnapshot = snapshot;
+function displaySnapshot(release) {
+  currentRelease = release;
+  const snapshot = release?.snapshot;
+  if (release?.locations) locations = release.locations;
   const points = attachLocations(snapshot?.points ?? [], locations.coordinates);
   data = {...defaultState, sourceDate: snapshot?.sourceDate ?? null, points, status: snapshot ? 'ready' : 'unavailable',
     priorities: [...new Set(points.flatMap(point => point.roles.map(role => role.priority)).filter(Boolean))],
@@ -405,22 +408,23 @@ async function refreshData(manual = false) {
   if (fetching) return;
   setBusy(true);
   try {
-    let snapshot = await fetchSnapshot();
-    assertFreshEnough(snapshot, currentSnapshot);
+    const candidate = await fetchRelease();
+    let release = selectRelease(candidate, currentRelease);
     try {
-      await saveSnapshot(snapshot);
+      release = await saveSnapshot(candidate);
     } catch (error) {
       if (error instanceof RangeError) {
-        snapshot = await readSnapshot();
-        if (!snapshot) throw error;
+        release = await readSnapshot();
+        if (!release) throw error;
       }
     }
+    if (currentRelease?.locations && !release.locations) locations = await loadLocations();
     updateError = false;
-    displaySnapshot(snapshot);
+    displaySnapshot(release);
     if (manual) showToast('Потребность обновлена');
   } catch {
     updateError = true;
-    if (currentSnapshot) updateSource();
+    if (currentRelease) updateSource();
     else displaySnapshot(null);
     if (manual) showToast('Обновление не удалось');
   } finally {
