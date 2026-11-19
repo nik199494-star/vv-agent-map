@@ -59,10 +59,9 @@ function harness(handle, {allowed = false, token = fakePat, locked = false, exte
     LockService: {getScriptLock: () => ({tryLock: () => !locked, releaseLock() {}})},
     ScriptApp: {
       AuthMode: {FULL: 'FULL'},
-      AuthorizationStatus: {REQUIRED: 'REQUIRED'},
-      getAuthorizationInfo: (mode, scopes) => {
+      requireScopes: (mode, scopes) => {
         scopeChecks.push([mode, ...scopes]);
-        return {getAuthorizationStatus: () => externalAccess ? 'NOT_REQUIRED' : 'REQUIRED'};
+        if (!externalAccess) throw Error('OAuth consent prompt');
       },
     },
     UrlFetchApp: {fetch: (url, options) => {
@@ -247,7 +246,7 @@ test('connection check uses the production-shaped GET query and expected headers
   assert.throws(guarded.checkConnection, /вне испытательного контура/);
 });
 
-test('malformed PAT values and missing OAuth consent are caught before calling UrlFetchApp', () => {
+test('malformed PAT values are caught before calling UrlFetchApp', () => {
   const noNetwork = () => assert.fail('Request with invalid setup');
   for (const token of ['Bearer ' + fakePat, '"' + fakePat + '"', fakePat + '\r\nInjected: value', 'ghp_INVALID', 'github_pat_']) {
     const h = harness(noNetwork, {token});
@@ -259,9 +258,21 @@ test('malformed PAT values and missing OAuth consent are caught before calling U
     assert.equal(h.log.length, 0);
     assert.equal(h.scopeChecks.length, 0);
   }
-  const h = harness(noNetwork, {externalAccess: false});
-  assert.throws(h.start, /\[VV_FETCH_OAUTH\].*чтение списка запусков.*script\.external_request/);
-  assert.equal(h.log.length, 0);
+});
+
+test('each entry point requests explicit external OAuth consent before reading a passport or contacting GitHub', () => {
+  const h = harness(() => assert.fail('No GitHub request before OAuth consent'), {allowed: true, externalAccess: false});
+  for (const entry of [h.checkConnection, h.startFromBook, h.checkFromBook]) {
+    assert.throws(entry, /^Error: OAuth consent prompt$/);
+  }
+  assert.deepEqual(h.scopeChecks, Array.from({length: 3}, () => ['FULL', fetchScope]));
+  assert.deepEqual(h.lookups, []);
+  assert.deepEqual(h.log, []);
+  assert.throws(h.check, /ещё не запрошен/);
+
+  const guarded = harness(() => assert.fail('No GitHub request outside the test workbook'));
+  assert.throws(guarded.checkConnection, /вне испытательного контура/);
+  assert.deepEqual(guarded.scopeChecks, []);
 });
 
 test('transport failures report a safe category and never dispatch when the list GET fails', () => {

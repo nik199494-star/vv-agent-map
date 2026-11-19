@@ -61,10 +61,6 @@ function vvDispatchPreviewRequest_(properties, path, operation, body) {
   }
   var result;
   try {
-    var authorization = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL, [VV_DISPATCH_EXTERNAL_SCOPE]);
-    if (authorization.getAuthorizationStatus() === ScriptApp.AuthorizationStatus.REQUIRED) {
-      throw Error('script.external_request');
-    }
     result = UrlFetchApp.fetch(VV_DISPATCH_ENDPOINT + path, options);
   } catch (cause) {
     throw vvDispatchFetchError_(cause, operation);
@@ -87,9 +83,16 @@ function vvDispatchPreviewRequest_(properties, path, operation, body) {
   catch (_) { throw Error('GitHub Actions вернул некорректный JSON (' + operation + ').'); }
 }
 
-function vvCheckDispatchPreviewConnection() {
+function vvDispatchAuthorizedBook_() {
   var book = SpreadsheetApp.getActiveSpreadsheet();
-  vvPreviewAssert_(book);
+  var ids = vvPreviewAssert_(book);
+  // Apps Script ends this execution and opens the consent prompt if the scope is missing.
+  ScriptApp.requireScopes(ScriptApp.AuthMode.FULL, [VV_DISPATCH_EXTERNAL_SCOPE]);
+  return {book: book, ids: ids};
+}
+
+function vvCheckDispatchPreviewConnection() {
+  var book = vvDispatchAuthorizedBook_().book;
   vvDispatchListRuns_(PropertiesService.getScriptProperties(), Date.now() - VV_DISPATCH_MAX_AGE);
   var message = 'Связь с GitHub Actions проверена. Запуск preview не отправлялся.';
   book.toast(message, 'GitHub preview', 10);
@@ -98,20 +101,18 @@ function vvCheckDispatchPreviewConnection() {
 }
 
 function vvStartDispatchPreview() {
-  var book = SpreadsheetApp.getActiveSpreadsheet();
-  var ids = vvPreviewAssert_(book);
-  var agent = SpreadsheetApp.openById(ids[2]);
+  var context = vvDispatchAuthorizedBook_();
+  var agent = SpreadsheetApp.openById(context.ids[2]);
   var passport = agent.getSheetByName('Паспорт preview');
   if (!passport) throw Error('Создайте испытательный паспорт в меню ВВ Preview.');
   var row = passport.getRange('A2:B2').getValues()[0];
   var report = vvDispatchStart_(PropertiesService.getScriptProperties(), row, Date.now());
-  book.toast(report.message, 'GitHub preview', 10);
+  context.book.toast(report.message, 'GitHub preview', 10);
   return report;
 }
 
 function vvConfirmDispatchPreview() {
-  var book = SpreadsheetApp.getActiveSpreadsheet();
-  vvPreviewAssert_(book);
+  var book = vvDispatchAuthorizedBook_().book;
   var report = vvDispatchStatus_(PropertiesService.getScriptProperties());
   book.toast(report.message, 'GitHub preview', 10);
   return report;

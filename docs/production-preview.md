@@ -45,14 +45,14 @@ function onOpen() {
 ### Если меню сообщает об ошибке UrlFetchApp
 
 1. В существующем испытательном Apps Script заменить только содержимое файла `DispatchPreview.gs` версией из PR. Меню и `Код.gs` уже подключены. Состояние `VV_MAIN_PREVIEW_STATE` сохраняется.
-2. В «Общих сведениях» проекта проверить область OAuth `https://www.googleapis.com/auth/script.external_request`. При явном списке `oauthScopes` в `appsscript.json` сохранить имеющиеся области и добавить эту, только если её нет. При первом запуске подтвердить внешний доступ под учётной записью, которая выполняет проверку. [Разрешение UrlFetchApp](https://developers.google.com/apps-script/reference/url-fetch#authorization)
+2. В «Общих сведениях» проекта проверить область OAuth `https://www.googleapis.com/auth/script.external_request`. Apps Script определяет её по использованию `UrlFetchApp`. При наличии явного списка `oauthScopes` в манифесте область должна присутствовать в списке. Наличие области в проекте и согласие конкретного пользователя проверяются отдельно. Команды GitHub и диагностическая функция вызывают `ScriptApp.requireScopes` до работы со снимком и GitHub. Если Google откроет окно разрешений, подтвердить «Подключение к внешнему сервису» под учётной записью, которая запускает preview, затем повторить вызов. [Запрос отдельных областей OAuth](https://developers.google.com/apps-script/concepts/scopes)
 3. В свойстве `VV_PREVIEW_DISPATCH_TOKEN` должно быть только значение fine-grained PAT с `Actions: write` для этого репозитория. Не вставляйте `Bearer`, кавычки или переносы внутри значения. Скрипт сам формирует заголовок `Authorization: Bearer …`. [Аутентификация GitHub REST API](https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api)
 4. В редакторе испытательного проекта выбрать `vvCheckDispatchPreviewConnection` и нажать «Выполнить». Эта функция делает тот же GET списка запусков, который выполняется перед отправкой preview. При успехе в журнале появится «Связь с GitHub Actions проверена. Запуск preview не отправлялся». После этого создать свежий паспорт и запустить проверку из меню.
 
 | Сообщение | Что проверить |
 | --- | --- |
 | `VV_FETCH_TOKEN` / `VV_FETCH_HEADER` | Формат значения PAT в свойствах скрипта. |
-| `VV_FETCH_OAUTH` | Область `script.external_request` и согласие пользователя. |
+| `VV_FETCH_OAUTH` | Отказ получен от самого `UrlFetchApp`. Проверить согласие пользователя и повторить `vvCheckDispatchPreviewConnection`. |
 | `VV_FETCH_POLICY` | Разрешён ли `https://api.github.com` политикой Google Workspace. [Ограничения внешних URL](https://developers.google.com/apps-script/guides/support/troubleshooting#urlfetch_calls_to_url_are_not_permitted_by_your_admin) |
 | `VV_FETCH_ARGUMENT` | Установлена ли актуальная версия файла со сформированным URL. |
 | `VV_FETCH_TIMEOUT` / `VV_FETCH_NETWORK` / `VV_FETCH_QUOTA` / `VV_FETCH_UNKNOWN` | Повторить проверку связи позже и сообщить код с названием операции, если сбой сохраняется. |
