@@ -10,6 +10,7 @@ import {assertFreshEnough, validateSnapshot} from '../source.js';
 const site = 'https://nik199494-star.github.io/vv-agent-map/';
 const optional = new Set(['.nojekyll', 'publication.json', 'rollback.json', 'rollback.js', 'release-cache.js']);
 const names = assets;
+export const releaseClientFiles = ['app.js', 'index.html', 'model.js', 'styles.css'];
 const hash = /^[a-f0-9]{64}$/;
 const transientCodes = new Set([
   'AbortError', 'TimeoutError', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE',
@@ -193,7 +194,7 @@ export async function prepareRollback(archive, failedFile, folder, now = new Dat
   await writeVerifiedBackup(folder, {files, manifest}, now.getTime());
 }
 
-export async function prepareRelease(archive, demandFile, coordinatesFile, folder, now = new Date()) {
+export async function prepareRelease(archive, demandFile, coordinatesFile, folder, now = new Date(), clientFolder) {
   const {files, manifest, snapshot: previous, rollback, protectedClient} = await readStoredBaseline(archive, now.getTime());
   if (!protectedClient) throw Error('Сначала сохраните выпуск с поддержкой отката.');
 
@@ -208,11 +209,19 @@ export async function prepareRelease(archive, demandFile, coordinatesFile, folde
   }
   files[releaseFiles.demand] = demand;
   files[releaseFiles.locations] = await readFile(coordinatesFile);
+  if (clientFolder) {
+    for (const name of releaseClientFiles) {
+      files[name] = await readFile(join(clientFolder, name));
+      manifest[name] = sha256(files[name]);
+    }
+  }
   for (const name of Object.values(releaseFiles)) manifest[name] = sha256(files[name]);
   files['publication.json'] = fromJson({schema: 1,
     ...Object.fromEntries(Object.entries(releaseFiles).map(([key, name]) => [key, manifest[name]]))});
   manifest['publication.json'] = sha256(files['publication.json']);
-  assertReleaseFiles(files, manifest, now.getTime());
+  if (!assertReleaseFiles(files, manifest, now.getTime()).protectedClient) {
+    throw Error('Новый клиент должен поддерживать откат из прогретого кеша.');
+  }
   await writeVerifiedBackup(folder, {files, manifest}, now.getTime());
 }
 

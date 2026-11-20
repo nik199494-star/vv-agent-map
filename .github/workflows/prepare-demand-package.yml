@@ -1,0 +1,89 @@
+name: Подготовить пакет обновления карты
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/prepare-demand-package.yml'
+      - 'scripts/**'
+      - 'test/demand-package.test.mjs'
+  push:
+    branches: ['codex/demand-package-test']
+    paths: ['.github/demand-package-test-request.json']
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: UUID из Паспорта preview, A2
+        required: true
+        type: string
+      snapshot_id:
+        description: ID принятого снимка из листа «Снимки»
+        required: true
+        type: string
+      hrm_date:
+        description: Дата HRM в формате ДД.ММ.ГГГГ
+        required: true
+        type: string
+      client:
+        description: Клиент пакета (published — действующий, checkout — из выбранной ветки)
+        required: true
+        type: choice
+        options: [published, checkout]
+        default: published
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test test/demand-package.test.mjs
+      - name: Собрать проверочный пакет
+        run: node scripts/demand-package.mjs fixture "${RUNNER_TEMP}/demand-fixture"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demand-package-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/demand-fixture/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  package:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/codex/demand-package-test')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: demand-package
+      deployment: false
+    concurrency:
+      group: vv-demand-package-sheets
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Сверить витрины и собрать пакет
+        env:
+          VV_PREVIEW_AGENT_ID: ${{ secrets.VV_PREVIEW_AGENT_ID }}
+          VV_PREVIEW_SHEETS_READER: ${{ secrets.VV_PREVIEW_SHEETS_READER }}
+        run: node scripts/demand-package.mjs sheets "${RUNNER_TEMP}/demand-package"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demand-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/demand-package/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7

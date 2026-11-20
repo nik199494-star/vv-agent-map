@@ -6,16 +6,20 @@ import {runInNewContext} from 'node:vm';
 import {agentHeaders} from '../scripts/agent-data.mjs';
 import {readDispatchPassport, runDispatchPreview, validateDispatch} from '../scripts/dispatch-preview.mjs';
 import {project, sha256} from '../scripts/projection.mjs';
+import {dateKey} from '../source.js';
 
 const uuid = '8b4e7763-b39a-414a-9d31-e35d5b4235bb';
 const title = 'VV preview ' + uuid;
 const id = 213;
-const now = new Date('2026-11-19T08:00:00Z');
-const points = [[], [], ['Данные HRM на 19.11.2026'], agentHeaders, [
+const {sourceDate} = JSON.parse(readFileSync(new URL('../demand.json', import.meta.url), 'utf8'));
+const day = dateKey(sourceDate);
+const now = new Date(day + 'T08:00:00Z');
+const hrmDate = 'Данные HRM на ' + sourceDate;
+const points = [[], [], [hrmDate], agentHeaders, [
   'Критичный', 'Нет', 'Москва', '99001', 'Москва, ул. Тестовая, д. 1',
   'Авто-курьер', 'Нет', '4', '0', '0%', '7000', '100', '50', '18', 'День', 'Фултайм',
 ]];
-const cities = [[], [], ['Данные HRM на 19.11.2026'], ['Город', 'Недобор'], ['Москва', '4']];
+const cities = [[], [], [hrmDate], ['Город', 'Недобор'], ['Москва', '4']];
 const view = project(points, 'agent');
 const passport = {
   id: 'snapshot-test', acceptedAt: now.toISOString(), requestedAt: now.toISOString(), sourceDate: view.date,
@@ -149,7 +153,7 @@ test('menu callbacks read the registered agent passport, dispatch UUID only and 
       assert.equal(options.method, undefined);
       return Response.json({valueRanges: [{values: points}, {values: cities}, {values: grid}]});
     });
-  assert.deepEqual(sameRequest, {sourceDate: '19.11.2026', points: 1, roles: 1, deficit: 4, mapped: 0});
+  assert.deepEqual(sameRequest, {sourceDate, points: 1, roles: 1, deficit: 4, mapped: 0});
   phase = 'completed';
   assert.equal(h.checkFromBook().verified, true);
   assert.equal(h.toasts.at(-1), 'Испытательный паспорт подтверждён · #' + id);
@@ -240,7 +244,7 @@ test('connection check uses the production-shaped GET query and expected headers
   assert.equal(request.escaping, false);
   assert.equal(request.muteHttpExceptions, true);
   assert.equal(request.followsRedirects, false);
-  assert.equal(request.target.search, '?event=workflow_dispatch&branch=main&per_page=100&created=%3E%3D2026-11-19T01%3A55%3A00.000Z');
+  assert.equal(request.target.search, '?event=workflow_dispatch&branch=main&per_page=100&created=%3E%3D' + day + 'T01%3A55%3A00.000Z');
   assert.throws(h.check, /ещё не запрошен/);
   const guarded = harness(() => assert.fail('No request outside the test workbook'));
   assert.throws(guarded.checkConnection, /вне испытательного контура/);
@@ -322,7 +326,7 @@ test('a fresh passport is required for a new dispatch, with a final lookup befor
   assert.match(h.start(grid[1], freshTime).message, /истёк/);
   assert.equal(h.start(fresh, freshTime).marker, freshUuid);
   assert.deepEqual(h.log.filter(call => call.method === 'post').map(call => call.body.inputs.request_id), [uuid, freshUuid]);
-  assert.equal(h.log[0].target.searchParams.get('created'), '>=2026-11-19T07:55:00.000Z');
+  assert.equal(h.log[0].target.searchParams.get('created'), '>=' + day + 'T07:55:00.000Z');
 });
 
 test('discover pre-existing runs and refuse duplicates or an incomplete lookup before POST', () => {
