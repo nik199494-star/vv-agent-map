@@ -144,7 +144,10 @@ test('read an isolated workbook through Sheets and build a reviewable package', 
   assert.equal(report.status, 'READY_FOR_REVIEW');
   assert.equal(report.snapshotId, f.passport.id);
   await assert.rejects(f.run('denied', {mode: 'sheets', input: () => readPreviewInput(env, () => new Response(null, {status: 403}))}),
-    /Не удалось прочитать/);
+    /Google OAuth вернул HTTP 403/);
+  await assert.rejects(f.run('not-json', {
+    mode: 'sheets', input: () => readPreviewInput({...env, VV_PREVIEW_SHEETS_READER: 'private fixture value'}, exchange),
+  }), {message: 'VV_PREVIEW_SHEETS_READER не содержит корректный JSON ключа.'});
   assert.deepEqual(await readdir(f.parent), ['sheets']);
 });
 
