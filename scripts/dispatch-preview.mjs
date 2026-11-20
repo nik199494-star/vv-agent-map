@@ -37,6 +37,15 @@ export function readDispatchPassport(grid, requestId, now) {
 
 export async function runDispatchPreview(event, env, now = new Date(), fetcher = fetch) {
   const requestId = validateDispatch(event, env);
+  const {points, cities, passportGrid} = await readPreviewInput(env, fetcher);
+  const passport = readDispatchPassport(passportGrid, requestId, now);
+  const coordinates = JSON.parse(await readFile(new URL('../coordinates.json', import.meta.url), 'utf8'));
+  const baseline = JSON.parse(await readFile(new URL('../demand.json', import.meta.url), 'utf8'));
+  const {totals} = assemble(passport, points, cities, coordinates, baseline, null, now);
+  return {sourceDate: passport.sourceDate, ...totals};
+}
+
+export async function readPreviewInput(env, fetcher = fetch) {
   const workbook = env.VV_PREVIEW_AGENT_ID;
   if (!/^[A-Za-z0-9_-]{30,100}$/u.test(workbook ?? '') || productionViews.has(workbook)) {
     throw Error('Укажите ID отдельной испытательной агентской книги.');
@@ -48,11 +57,7 @@ export async function runDispatchPreview(event, env, now = new Date(), fetcher =
   const token = await accessToken(key, fetcher);
   if (typeof token !== 'string' || !token) throw Error('Google OAuth не вернул токен читателя.');
   const [points, cities, passportGrid] = await readSheetValues(workbook, [...agentRanges, passportRange], token, fetcher);
-  const passport = readDispatchPassport(passportGrid, requestId, now);
-  const coordinates = JSON.parse(await readFile(new URL('../coordinates.json', import.meta.url), 'utf8'));
-  const baseline = JSON.parse(await readFile(new URL('../demand.json', import.meta.url), 'utf8'));
-  const {totals} = assemble(passport, points, cities, coordinates, baseline, null, now);
-  return {sourceDate: passport.sourceDate, ...totals};
+  return {points, cities, passportGrid};
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
