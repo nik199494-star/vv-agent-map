@@ -2,7 +2,7 @@ import {mkdir, mkdtemp, readFile, rename, rm, writeFile, lstat, appendFile} from
 import {basename, dirname, join, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {dateKey} from '../source.js';
-import {attachLocations} from '../locations.js';
+import {attachLocations, locationReasons} from '../locations.js';
 import {readDispatchPassport, readPreviewInput} from './dispatch-preview.mjs';
 import {assemble, metrics, validateHandoff} from './release.mjs';
 import {prepareRelease, readStoredBaseline, savePagesBaseline, verifyPagesBaseline} from './pages-baseline.mjs';
@@ -59,8 +59,8 @@ function checkArchivedRelease(previous, release, passport, totals) {
 
 export function formatPackageReport(report) {
   const {points, roles, deficit, mapped, withoutMarker, unresolvedByReason} = report.totals;
-  const reasons = {pending: 'нуждается в проверке', different: 'адрес отличается', changed: 'адрес изменился', conflict: 'конфликт адресов'};
-  const warnings = Object.entries(unresolvedByReason).map(([reason, count]) => `- Без маркера, ${reasons[reason] ?? 'адрес уточняется'} — ${count}.\n`).join('');
+  const warnings = Object.entries(unresolvedByReason).map(([reason, count]) =>
+    `- ${locationReasons[reason] ?? locationReasons.pending} — ${count} ТТ без маркера.\n`).join('');
   return `# Пакет обновления потребности
 
 ${report.status === 'READY_FOR_REVIEW' ? 'Проверен, ожидает решения владельца о выпуске.' : 'Испытательный пакет для проверки цепочки.'}
