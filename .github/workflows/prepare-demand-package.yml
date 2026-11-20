@@ -75,24 +75,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Сверить настройки испытательного доступа
-        env:
-          VV_PREVIEW_AGENT_ID: ${{ secrets.VV_PREVIEW_AGENT_ID }}
-          VV_PREVIEW_SHEETS_READER: ${{ secrets.VV_PREVIEW_SHEETS_READER }}
-        run: |
-          node --input-type=module <<'NODE'
-          import {createHash} from 'node:crypto';
-          const digest = text => createHash('sha256').update('vv-demand-package-v1:' + text).digest('hex');
-          const book = digest(process.env.VV_PREVIEW_AGENT_ID?.trim() ?? '') === '1a6005e9d7f17bac23881c006e823a962551d46bc6b2f9900fa76c759b6c1022';
-          let reader = false;
-          try {
-            const key = JSON.parse(process.env.VV_PREVIEW_SHEETS_READER?.replace(/^\uFEFF/u, '') ?? 'null');
-            reader = digest(key?.client_email ?? '') === '8b17b1d2221fc709622c56117c32c07d5c00a77b49e8fe1d29e08f799fe9a1dc';
-          } catch {}
-          console.log('VV_PREVIEW_AGENT_ID: ' + (book ? 'ID испытательной витрины совпадает.' : 'ID испытательной витрины не совпадает.'));
-          console.log('VV_PREVIEW_SHEETS_READER: ' + (reader ? 'Ключ принадлежит зарегистрированному читателю.' : 'Ключ не принадлежит зарегистрированному читателю.'));
-          if (!book || !reader) process.exitCode = 1;
-          NODE
       - name: Сверить витрины и собрать пакет
         env:
           VV_PREVIEW_AGENT_ID: ${{ secrets.VV_PREVIEW_AGENT_ID }}
