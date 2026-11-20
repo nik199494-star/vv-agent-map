@@ -6,7 +6,7 @@ import {build} from '../build.mjs';
 import {dateKey} from '../source.js';
 import * as clientModel from '../model.js';
 import {attachLocations, locationReasons} from '../locations.js';
-import {readDispatchPassport, readPreviewInput} from './dispatch-preview.mjs';
+import {PreviewInputError, readDispatchPassport, readPreviewInput} from './dispatch-preview.mjs';
 import {assemble, metrics, validateHandoff} from './release.mjs';
 import {sha256} from './projection.mjs';
 import {prepareRelease, readStoredBaseline, releaseClientFiles, savePagesBaseline, verifyPagesBaseline} from './pages-baseline.mjs';
@@ -42,7 +42,10 @@ export function packageRequestForRun(event, env, requestOnBranch) {
 
 async function phase(message, run) {
   try { return await run(); }
-  catch (cause) { throw Error(message, {cause}); }
+  catch (cause) {
+    if (cause instanceof PreviewInputError) throw cause;
+    throw Error(message, {cause});
+  }
 }
 
 function checkArchivedRelease(previous, release, passport, totals, clientHashes) {
