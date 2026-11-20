@@ -21,6 +21,37 @@ export function tone(priority) {
   return ['urgent', 'top', 'top', 'high'][rank(priority)] ?? 'normal';
 }
 
+const underageNote = /(?<![\p{L}\p{N}])(?:нсв|несовершеннолетн\p{L}*|(?:от|с)\s+1[0-7]\s+лет|(?:до|младше)\s+18\s+лет)(?![\p{L}\p{N}])/iu;
+const ageField = /^возраст(?:ные ограничения)?\s*[:—–-]/iu;
+
+function withoutAgeNotes(text) {
+  return text.split(/\r?\n/u).flatMap(line => {
+    const prefix = line.match(/^\s*Прочее:\s*/iu)?.[0] ?? '';
+    const parts = line.slice(prefix.length).split(/[;·]/u).map(part => part.trim());
+    const kept = parts.filter(part => !underageNote.test(part) && !ageField.test(part));
+    if (kept.length === parts.length) return [line];
+    const remaining = kept.filter(Boolean).join(line.includes('·') ? ' · ' : '; ');
+    return remaining ? [prefix + remaining] : [];
+  }).join('\n');
+}
+
+// The project owner confirmed an 18+ policy for every role at this store.
+// Apply it to each display snapshot without changing the verified release or cache.
+export function applyPointRules(points) {
+  return points.map(point => point.id !== '4743' ? point : {
+    ...point,
+    adultOnly: true,
+    roles: point.roles.map(role => ({
+      ...role,
+      age: {min: 18, max: null},
+      ageRaw: '18',
+      nsv: false,
+      conditions: withoutAgeNotes(role.conditions),
+      scheduleRaw: withoutAgeNotes(role.scheduleRaw),
+    })),
+  });
+}
+
 export function findPoints(points, filters) {
   const terms = normalize(filters.search).split(' ').filter(term => term && term !== 'тт');
   const conditionTerms = normalize(filters.conditions).split(' ').filter(Boolean);
