@@ -1,11 +1,15 @@
 import {mkdir, mkdtemp, readFile, rename, rm, writeFile, lstat, appendFile} from 'node:fs/promises';
-import {basename, dirname, join, resolve} from 'node:path';
+import {basename, dirname, join, resolve, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {isDeepStrictEqual} from 'node:util';
+import {build} from '../build.mjs';
 import {dateKey} from '../source.js';
+import * as clientModel from '../model.js';
 import {attachLocations, locationReasons} from '../locations.js';
 import {readDispatchPassport, readPreviewInput} from './dispatch-preview.mjs';
 import {assemble, metrics, validateHandoff} from './release.mjs';
-import {prepareRelease, readStoredBaseline, savePagesBaseline, verifyPagesBaseline} from './pages-baseline.mjs';
+import {sha256} from './projection.mjs';
+import {prepareRelease, readStoredBaseline, releaseClientFiles, savePagesBaseline, verifyPagesBaseline} from './pages-baseline.mjs';
 
 const integrationRef = 'refs/heads/codex/demand-package-test';
 const marker = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
@@ -18,9 +22,12 @@ const sources = {
 };
 
 export function parsePackageRequest(input) {
-  if (!input || Object.keys(input).length !== 3 || !marker.test(input.request_id ?? '') ||
-      !/^[a-z0-9-]{12,80}$/iu.test(input.snapshot_id ?? '') || !dateKey(input.hrm_date)) {
+  if (!input || Object.keys(input).some(key => !['request_id', 'snapshot_id', 'hrm_date', 'client'].includes(key)) ||
+      !marker.test(input.request_id ?? '') || !/^[a-z0-9-]{12,80}$/iu.test(input.snapshot_id ?? '') || !dateKey(input.hrm_date)) {
     throw Error('Нужны UUID строки паспорта, ID принятого снимка и дата HRM в формате ДД.ММ.ГГГГ.');
+  }
+  if (input.client !== undefined && !['published', 'checkout'].includes(input.client)) {
+    throw Error('Для клиента пакета выберите published или checkout.');
   }
   return input;
 }
@@ -38,7 +45,7 @@ async function phase(message, run) {
   catch (cause) { throw Error(message, {cause}); }
 }
 
-function checkArchivedRelease(previous, release, passport, totals) {
+function checkArchivedRelease(previous, release, passport, totals, clientHashes) {
   const actual = metrics(release.snapshot.points);
   const unresolved = new Map();
   for (const point of attachLocations(release.snapshot.points, JSON.parse(release.files['coordinates.json']))) {
@@ -51,8 +58,9 @@ function checkArchivedRelease(previous, release, passport, totals) {
   if (!release.protectedClient || release.snapshot.snapshotId !== passport.id || release.snapshot.sourceDate !== passport.sourceDate ||
       Object.keys(actual).some(key => actual[key] !== totals[key]) ||
       actual.points - withoutMarker !== totals.mapped ||
-      Object.keys(previous.manifest).some(name => !publishable.has(name) && previous.manifest[name] !== release.manifest[name])) {
-    throw Error('Проверенный архив расходится со снимком, геопокрытием или действующим клиентом.');
+      Object.keys(previous.manifest).some(name => !publishable.has(name) &&
+        (clientHashes[name] ?? previous.manifest[name]) !== release.manifest[name])) {
+    throw Error('Проверенный архив расходится со снимком, геопокрытием или выбранным клиентом.');
   }
   return {...actual, mapped: totals.mapped, withoutMarker, unresolvedByReason: Object.fromEntries([...unresolved].sort())};
 }
@@ -61,6 +69,9 @@ export function formatPackageReport(report) {
   const {points, roles, deficit, mapped, withoutMarker, unresolvedByReason} = report.totals;
   const warnings = Object.entries(unresolvedByReason).map(([reason, count]) =>
     `- ${locationReasons[reason] ?? locationReasons.pending} — ${count} ТТ без маркера.\n`).join('');
+  const client = report.client.mode === 'checkout'
+    ? `Сборка исходников${report.client.commit ? ` \`${report.client.commit}\`` : ''}. Правило 18+ для №4743 применено к выходным данным.`
+    : 'Интерфейс действующего выпуска. Для совместного выпуска требуется пакет с выбранным новым клиентом.';
   return `# Пакет обновления потребности
 
 ${report.status === 'READY_FOR_REVIEW' ? 'Проверен, ожидает решения владельца о выпуске.' : 'Испытательный пакет для проверки цепочки.'}
@@ -68,6 +79,8 @@ ${report.status === 'READY_FOR_REVIEW' ? 'Проверен, ожидает ре�
 - Источник — ${report.source}
 - Дата HRM — ${report.hrmDate}
 - ID снимка — \`${report.snapshotId}\`
+- Клиент — ${client}
+- Файлы выпуска, отличающиеся от резерва — ${report.changedFiles.join(', ')}
 - ТТ — ${points}, позиции ТТ+роль — ${roles}, недобор — ${deficit} чел.
 - На карте — ${mapped}, без маркера — ${withoutMarker}
 ${warnings}
@@ -75,9 +88,13 @@ ${warnings}
 `;
 }
 
-export async function buildDemandPackage({request, input, mode, folder, fetcher, now = new Date()}) {
+export async function buildDemandPackage({request, input, mode, folder, fetcher, clientCommit, now = new Date()}) {
   parsePackageRequest(request);
   if (!Object.hasOwn(sources, mode)) throw Error('Неизвестный источник пакета.');
+  const clientMode = request.client ?? 'published';
+  if (clientMode === 'checkout' && typeof clientModel.applyPointRules !== 'function') {
+    throw Error('Для совместного пакета нужна версия клиента с правилом 18+ для ТТ №4743.');
+  }
   const target = resolve(folder);
   await mkdir(dirname(target), {recursive: true});
   try {
@@ -104,16 +121,38 @@ export async function buildDemandPackage({request, input, mode, folder, fetcher,
     const demandFile = join(work, 'input-demand.json');
     const coordinatesFile = join(work, 'input-coordinates.json');
     const report = await phase('Проверка состава, квитанций или сборка пакета завершилась ошибкой.', async () => {
-      await Promise.all([[demandFile, snapshot], [coordinatesFile, coordinates]].map(([path, value]) =>
-        writeFile(path, JSON.stringify(value) + '\n', {flag: 'wx'})));
-      await prepareRelease(baseline, demandFile, coordinatesFile, releaseDir, now);
+      let clientFolder;
+      if (clientMode === 'checkout') {
+        clientFolder = join(work, 'client');
+        await build(pathToFileURL(clientFolder + sep));
+        const corrected = new Map(clientModel.applyPointRules(snapshot.points).map(point => [point.id, point]));
+        snapshot.points = snapshot.points.map(point => point.id === '4743' ? {...point, roles: corrected.get(point.id).roles} : point);
+      }
+      const previousCoordinates = previous.files['coordinates.json'];
+      const coordinatesBytes = isDeepStrictEqual(JSON.parse(previousCoordinates), coordinates)
+        ? previousCoordinates : JSON.stringify(coordinates) + '\n';
+      await Promise.all([
+        writeFile(demandFile, JSON.stringify(snapshot) + '\n', {flag: 'wx'}),
+        writeFile(coordinatesFile, coordinatesBytes, {flag: 'wx'}),
+      ]);
+      await prepareRelease(baseline, demandFile, coordinatesFile, releaseDir, now, clientFolder);
       const release = await readStoredBaseline(releaseDir, now.getTime());
-      const verified = checkArchivedRelease(previous, release, passport, totals);
+      const clientHashes = clientFolder ? Object.fromEntries(await Promise.all(releaseClientFiles.map(async name =>
+        [name, sha256(await readFile(join(clientFolder, name)))]))) : {};
+      const verified = checkArchivedRelease(previous, release, passport, totals, clientHashes);
+      const correctedRoles = release.snapshot.points.find(point => point.id === '4743')?.roles ?? [];
+      if (clientFolder && correctedRoles.some(role => role.nsv !== false || role.age?.min !== 18)) {
+        throw Error('В совместном пакете обнаружены неподтверждённые возрастные условия ТТ №4743.');
+      }
+      if (clientFolder) await rm(clientFolder, {recursive: true, force: true});
       await Promise.all([rm(demandFile), rm(coordinatesFile)]);
       return {
         status: mode === 'sheets' ? 'READY_FOR_REVIEW' : 'TEST_ONLY',
         source: sources[mode], hrmDate: passport.sourceDate, snapshotId: passport.id,
         acceptedAt: passport.acceptedAt, requestId: request.request_id, totals: verified,
+        client: {mode: clientMode, commit: clientFolder && /^[a-f0-9]{40}$/u.test(clientCommit ?? '') ? clientCommit : null,
+          corrected4743Roles: clientFolder ? correctedRoles.length : null},
+        changedFiles: Object.keys(release.manifest).filter(name => release.manifest[name] !== previous.manifest[name]),
         files: release.manifest, previousFiles: previous.manifest,
       };
     });
@@ -159,7 +198,7 @@ async function run(mode, paths) {
       const requestFile = env.GITHUB_EVENT_NAME === 'push' && env.GITHUB_REF === integrationRef
         ? await json('.github/demand-package-test-request.json') : null;
       const request = packageRequestForRun(event, env, requestFile);
-      report = await buildDemandPackage({mode, request, input: () => readPreviewInput(env), folder});
+      report = await buildDemandPackage({mode, request, input: () => readPreviewInput(env), folder, clientCommit: env.GITHUB_SHA});
       break;
     }
     case 'fixture': {

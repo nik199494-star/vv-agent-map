@@ -23,6 +23,12 @@ on:
         description: Дата HRM в формате ДД.ММ.ГГГГ
         required: true
         type: string
+      client:
+        description: Клиент пакета (published — действующий, checkout — из выбранной ветки)
+        required: true
+        type: choice
+        options: [published, checkout]
+        default: published
 
 permissions:
   contents: read

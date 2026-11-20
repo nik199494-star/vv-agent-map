@@ -4,9 +4,11 @@ import {mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
+import * as model from '../model.js';
 import {buildDemandPackage, packageRequestForRun, parsePackageRequest} from '../scripts/demand-package.mjs';
 import {demandPackageFixture} from '../scripts/demand-package-fixture.mjs';
-import {readStoredBaseline} from '../scripts/pages-baseline.mjs';
+import {prepareRollback, readStoredBaseline, releaseClientFiles} from '../scripts/pages-baseline.mjs';
+import {project, sha256} from '../scripts/projection.mjs';
 import {attachLocations} from '../locations.js';
 import {readPreviewInput} from '../scripts/dispatch-preview.mjs';
 
@@ -36,6 +38,8 @@ test('restrict Sheets packages to main dispatch and the dedicated integration br
   assert.throws(() => packageRequestForRun({ref: 'refs/heads/codex/p1-visual-v1', deleted: false}, integration, request), /разрешён/);
   assert.throws(() => parsePackageRequest({...request, hrm_date: '31.11.2026'}), /дата HRM/);
   assert.throws(() => parsePackageRequest({...request, mode: 'deploy'}), /Нужны UUID/);
+  assert.equal(parsePackageRequest({...request, client: 'checkout'}).client, 'checkout');
+  assert.throws(() => parsePackageRequest({...request, client: 'arbitrary-ref'}), /выберите published или checkout/);
 });
 
 test('build and repeat the same passport with unchanged data and both verified receipts', async t => {
@@ -58,6 +62,9 @@ test('build and repeat the same passport with unchanged data and both verified r
   assert.deepEqual((await readdir(folder)).sort(), ['previous', 'release', 'report.json', 'report.md']);
   await assert.rejects(f.run('first'), /уже существует/);
   assert.deepEqual(JSON.parse(await readFile(join(folder, 'report.json'))), first);
+  const unchanged = await f.run('unchanged-coordinates', {input: () => withPassport(f, {geo: []})});
+  assert.equal(unchanged.files['coordinates.json'], unchanged.previousFiles['coordinates.json']);
+  assert.equal(unchanged.changedFiles.includes('coordinates.json'), false);
 });
 
 test('reject expired, stale and already published snapshots and a mismatched marker', async t => {
@@ -139,4 +146,46 @@ test('read an isolated workbook through Sheets and build a reviewable package', 
   await assert.rejects(f.run('denied', {mode: 'sheets', input: () => readPreviewInput(env, () => new Response(null, {status: 403}))}),
     /Не удалось прочитать/);
   assert.deepEqual(await readdir(f.parent), ['sheets']);
+});
+
+test('combined checkout requires the approved client and preserves the original files for rollback', async t => {
+  const f = await scenario(t);
+  const request = {...f.request, client: 'checkout'};
+  if (typeof model.applyPointRules !== 'function') {
+    await assert.rejects(f.run('missing-client', {request}), /нужна версия клиента с правилом 18\+/);
+    assert.deepEqual(await readdir(f.parent), []);
+    return;
+  }
+  const points = f.input.points.map((row, index) => {
+    if (index < 4 || row[3] !== '999001') return row;
+    return row.map((cell, j) => ({3: '4743', 6: 'Да', 13: '16', 15: 'НСВ: Да; Подработка возможна'})[j] ?? cell);
+  });
+  const {signature} = project(points, 'agent');
+  const geo = f.passport.geo.map(row => row.id === '999001' ? {...row, id: '4743'} : row);
+  const input = {...withPassport(f, {geo, digest: sha256(signature)}), points};
+  const clientCommit = 'a'.repeat(40);
+  const earlierStyles = '/* previous client stylesheet */';
+  const fetcher = url => new URL(url).pathname.endsWith('/styles.css') ? new Response(earlierStyles) : f.fetcher(url);
+  const combined = await f.run('combined', {request, input: () => input, fetcher, clientCommit});
+  assert.deepEqual(combined.client, {mode: 'checkout', commit: clientCommit, corrected4743Roles: 2});
+  assert.ok(combined.changedFiles.includes('styles.css'));
+  const folder = join(f.parent, 'combined');
+  const release = await readStoredBaseline(join(folder, 'release'), f.now.getTime());
+  const previous = await readStoredBaseline(join(folder, 'previous'), f.now.getTime());
+  assert.equal(previous.files['styles.css'].toString(), earlierStyles);
+  for (const name of releaseClientFiles) {
+    const compiled = await readFile(new URL('../' + name, import.meta.url));
+    assert.equal(release.manifest[name], sha256(compiled), name);
+  }
+  const point = release.snapshot.points.find(item => item.id === '4743');
+  for (const role of point.roles) {
+    assert.equal(role.age.min, 18);
+    assert.equal(role.nsv, false);
+    assert.doesNotMatch(role.conditions, /НСВ/u);
+    assert.match(role.conditions, /Подработка/u);
+  }
+  const restoredFolder = join(f.parent, 'restored');
+  await prepareRollback(join(folder, 'previous'), join(folder, 'release', 'demand.json'), restoredFolder, f.now);
+  const restored = await readStoredBaseline(restoredFolder, f.now.getTime());
+  assert.deepEqual(Object.keys(previous.manifest).filter(name => restored.manifest[name] !== previous.manifest[name]), ['rollback.json']);
 });
