@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {generateKeyPairSync} from 'node:crypto';
 import {mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -7,6 +8,7 @@ import {buildDemandPackage, packageRequestForRun, parsePackageRequest} from '../
 import {demandPackageFixture} from '../scripts/demand-package-fixture.mjs';
 import {readStoredBaseline} from '../scripts/pages-baseline.mjs';
 import {attachLocations} from '../locations.js';
+import {readPreviewInput} from '../scripts/dispatch-preview.mjs';
 
 async function scenario(t) {
   const fixture = await demandPackageFixture();
@@ -103,4 +105,38 @@ test('failed stage and changing Pages leave no downloadable package or ready sta
     return f.fetcher(url);
   }}), /Действующая карта изменилась/);
   assert.deepEqual(await readdir(f.parent), []);
+});
+
+test('read an isolated workbook through Sheets and build a reviewable package', async t => {
+  const f = await scenario(t);
+  const {privateKey} = generateKeyPairSync('rsa', {modulusLength: 2048});
+  const env = {
+    VV_PREVIEW_AGENT_ID: 'isolated_workbook_for_package_test',
+    VV_PREVIEW_SHEETS_READER: JSON.stringify({
+      client_email: 'package-test@example.invalid',
+      private_key: privateKey.export({type: 'pkcs8', format: 'pem'}),
+    }),
+  };
+  const requests = [];
+  const exchange = async (url, options) => {
+    const target = new URL(url);
+    requests.push(target.hostname);
+    if (target.hostname === 'oauth2.googleapis.com') {
+      const [, encoded] = options.body.get('assertion').split('.');
+      assert.equal(JSON.parse(Buffer.from(encoded, 'base64url')).scope, 'https://www.googleapis.com/auth/spreadsheets.readonly');
+      return Response.json({access_token: 'fixture-token'});
+    }
+    assert.equal(target.hostname, 'sheets.googleapis.com');
+    assert.match(target.pathname, /isolated_workbook_for_package_test\/values:batchGet$/);
+    assert.deepEqual(target.searchParams.getAll('ranges'), ["'Потребность точки'!A:P", "'Потребность города'!A:M", "'Паспорт preview'!A1:B2"]);
+    assert.equal(options.headers.authorization, 'Bearer fixture-token');
+    return Response.json({valueRanges: [f.input.points, f.input.cities, f.input.passportGrid].map(values => ({values}))});
+  };
+  const report = await f.run('sheets', {mode: 'sheets', input: () => readPreviewInput(env, exchange)});
+  assert.deepEqual(requests, ['oauth2.googleapis.com', 'sheets.googleapis.com']);
+  assert.equal(report.status, 'READY_FOR_REVIEW');
+  assert.equal(report.snapshotId, f.passport.id);
+  await assert.rejects(f.run('denied', {mode: 'sheets', input: () => readPreviewInput(env, () => new Response(null, {status: 403}))}),
+    /Не удалось прочитать/);
+  assert.deepEqual(await readdir(f.parent), ['sheets']);
 });
