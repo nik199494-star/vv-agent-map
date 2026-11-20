@@ -1,4 +1,4 @@
-import {UNKNOWN, TRANSPORT, SCHEDULE, findPoints, normalize, rank, tone, number, incomeText, ageText} from './model.js';
+import {UNKNOWN, TRANSPORT, SCHEDULE, applyPointRules, findPoints, normalize, rank, tone, number, incomeText, ageText} from './model.js';
 import {isOutdated} from './source.js';
 import {fetchRelease, selectRelease} from './rollback.js';
 import {readSnapshot, saveSnapshot} from './release-cache.js';
@@ -452,7 +452,7 @@ function renderDetail() {
       <dl class="detail-grid">
         ${formatMetric('Кандидатов в работе', role.inProgress === null ? UNKNOWN : number(role.inProgress))}
         ${formatMetric('Покрытие воронкой', role.coverage || UNKNOWN)}
-        ${formatMetric('Принимает несовершеннолетних', role.nsv === null ? UNKNOWN : role.nsv ? 'Да' : 'Нет')}
+        ${point.adultOnly ? '' : formatMetric('Принимает несовершеннолетних', role.nsv === null ? UNKNOWN : role.nsv ? 'Да' : 'Нет')}
         ${formatMetric('Возраст', ageText(role.age))}
         ${formatMetric('Ориентир дохода', incomeText(role.income))}${formatMetric('Средний доход за заказ', cleanUnits(role.perOrder, ' ₽'))}
         ${formatMetric('Пробег', cleanUnits(role.distance, ' км/день'))}
@@ -491,7 +491,7 @@ function displaySnapshot(release) {
   currentRelease = release;
   const snapshot = release?.snapshot;
   locations = release?.locations ?? emptyLocations;
-  const points = attachLocations(snapshot?.points ?? [], locations.coordinates);
+  const points = attachLocations(applyPointRules(snapshot?.points ?? []), locations.coordinates);
   data = {...defaultState, sourceDate: snapshot?.sourceDate ?? null, points, status: snapshot ? 'ready' : 'unavailable',
     priorities: [...new Set(points.flatMap(point => point.roles.map(role => role.priority)).filter(Boolean))],
     cities: [...new Set(points.map(point => point.city).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'))};
@@ -642,7 +642,7 @@ $('clear-candidate').addEventListener('click', () => {
   render(true);
   $('candidate-search').focus();
 });
-$('reset').addEventListener('click', () => {
+$('reset-filters').addEventListener('click', () => {
   $('filters').reset();
   $('search').value = '';
   closeStoreLookup();

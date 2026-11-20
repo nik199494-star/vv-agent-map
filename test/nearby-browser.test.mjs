@@ -51,15 +51,18 @@ const coordinates = Object.fromEntries(
 
 async function openMap(page, stores = points, coordinateRows = coordinates) {
   const data = {
-    'demand.json': Buffer.from(JSON.stringify({schema: 3, sourceDate: '19.11.2026', publishedAt: new Date().toISOString(), points: stores})),
     'coordinates.json': Buffer.from(JSON.stringify(coordinateRows)),
     'ru-city-centers.json': await readFile(new URL('../ru-city-centers.json', import.meta.url)),
     'rollback.json': Buffer.from(JSON.stringify({schema: 1, active: false})),
   };
   const hash = name => createHash('sha256').update(data[name]).digest('hex');
-  data['publication.json'] = Buffer.from(JSON.stringify({
-    schema: 1, demand: hash('demand.json'), locations: hash('coordinates.json'), cities: hash('ru-city-centers.json'),
-  }));
+  function publish(stores) {
+    data['demand.json'] = Buffer.from(JSON.stringify({schema: 3, sourceDate: '19.11.2026', publishedAt: new Date().toISOString(), points: stores}));
+    data['publication.json'] = Buffer.from(JSON.stringify({
+      schema: 1, demand: hash('demand.json'), locations: hash('coordinates.json'), cities: hash('ru-city-centers.json'),
+    }));
+  }
+  publish(stores);
   await page.route('https://photon.komoot.io/api/**', route => route.fulfill({
     headers: {'access-control-allow-origin': '*'}, json: {features: [station]},
   }));
@@ -79,6 +82,7 @@ async function openMap(page, stores = points, coordinateRows = coordinates) {
   assert.equal(await page.locator('#start-hint').isVisible(), true);
   await page.locator('#candidate-search').fill('метро Станция проверки');
   await page.getByRole('option', {name: /Станция проверки/}).click();
+  return publish;
 }
 
 const unknownGroup = '#without-coordinates-results';
@@ -264,4 +268,119 @@ test('Chromium: independent pagination, unknown-only and empty results on deskto
       assert.match(await content(page, '#results'), /Подходящих ТТ рядом не найдено/);
     });
   }
+});
+
+test('Chromium: clicking reset clears the filters and restores nearby results without losing the address or radius', {skip, timeout: 45_000}, async t => {
+  const {chromium} = await import(pathToFileURL(playwrightPath));
+  const browser = await chromium.launch({executablePath: chromePath});
+  t.after(() => browser.close());
+  for (const viewport of [viewports[0], viewports[2]]) {
+    await t.test(`${viewport.width} × ${viewport.height}`, {timeout: 20_000}, async t => {
+      const mobile = viewport.width <= 759;
+      const page = await browser.newPage({viewport, isMobile: mobile, hasTouch: mobile});
+      t.after(() => page.close());
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await openMap(page);
+      const address = await page.locator('#candidate-search').inputValue();
+
+      for (const radius of ['5', '3']) {
+        await page.locator('#radius').selectOption(radius);
+        await page.locator('#open-filters').click();
+        await page.getByRole('button', {name: 'Авто', exact: true}).click();
+        await page.locator('#shift').fill('4');
+        await page.waitForFunction(() => document.getElementById('apply-filters').textContent === 'Показать ТТ · 1');
+        assert.equal(await content(page, '#filter-count'), '2');
+        await page.getByRole('button', {name: 'Сбросить фильтры', exact: true}).click();
+        assert.deepEqual(errors, []);
+        assert.equal(await page.locator('#shift').inputValue(), '');
+        assert.equal(await page.locator('[data-transport="auto"]').getAttribute('aria-pressed'), 'false');
+        assert.equal(await content(page, '#filter-count'), '0');
+        assert.equal(await page.locator('#filter-count').isVisible(), false);
+        assert.equal(await content(page, '#apply-filters'), 'Показать ТТ · 7');
+        await page.locator('#apply-filters').click();
+        assert.equal(await page.locator('#candidate-search').inputValue(), address);
+        assert.equal(await page.locator('#radius').inputValue(), radius);
+        await assertGroups(page, ['101', '107', '102'], ['105', '106', '108', '104'], 160);
+      }
+    });
+  }
+});
+
+test('Chromium: all roles at ТТ №4743 are adult-only in the card and clipboard after refresh and cache reload', {skip, timeout: 30_000}, async t => {
+  const {chromium} = await import(pathToFileURL(playwrightPath));
+  const browser = await chromium.launch({executablePath: chromePath});
+  t.after(() => browser.close());
+  const page = await browser.newPage({permissions: ['clipboard-read', 'clipboard-write']});
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const conflictingRole = {age: {min: 16, max: null}, ageRaw: '16', nsv: true,
+    conditions: 'Формат: фултайм + подработка\nПрочее: Студенты — да; НСВ — да; Выходные — да',
+    scheduleRaw: 'По 8 часов · Несовершеннолетние допускаются · Вечерние часы'};
+  const store = point('4743', 'Москва', [autoDay('Критичный', 2), ['electric', ['night', 'part'], 'Критичный', 3, 8]]);
+  const other = point('4744', 'Москва', [autoDay('Критичный', 1)]);
+  for (const role of [...store.roles, ...other.roles]) Object.assign(role, conflictingRole);
+  const publish = await openMap(page, [store, other], {});
+  const openPoint = async id => {
+    await page.locator('#open-store-lookup').click();
+    await page.locator('#search').fill(id);
+    await page.getByRole('option', {name: new RegExp(`ТТ №${id}`)}).click();
+  };
+  const noMinors = /нсв|несовершеннолетн|(?:от|с)\s*16\s*лет/iu;
+  const checkRoles = async () => {
+    await openPoint('4743');
+    const roleButtons = page.locator('#detail [data-role]');
+    assert.equal(await roleButtons.count(), store.roles.length);
+    for (const button of await roleButtons.all()) {
+      const roleId = await button.getAttribute('data-role');
+      const role = store.roles.find(role => role.id === roleId);
+      await button.click();
+      assert.equal(await button.getAttribute('aria-pressed'), 'true');
+      await page.locator('#detail summary').first().click();
+      await page.getByText('Исходные условия роли в HRM', {exact: true}).click();
+      const text = await page.locator('#detail').innerText();
+      assert.match(text, /Возраст\s+От 18 лет/);
+      assert.doesNotMatch(text, noMinors);
+      assert.match(text, /Студенты — да; Выходные — да/);
+      assert.match(text, /По 8 часов · Вечерние часы/);
+      await page.getByRole('button', {name: 'Скопировать данные ТТ', exact: true}).click();
+      await page.getByRole('button', {name: 'Данные скопированы', exact: true}).waitFor();
+      const copied = await page.evaluate(() => navigator.clipboard.readText());
+      assert.equal(copied.split(/\r?\n/u)[2], role.title);
+      assert.match(copied, /Возраст: От 18 лет/);
+      assert.match(copied, /Студенты — да; Выходные — да/);
+      assert.doesNotMatch(copied, noMinors);
+    }
+    await page.locator('#close-detail').click();
+  };
+  await checkRoles();
+  await openPoint('4744');
+  assert.match(await page.locator('#detail').innerText(), /Принимает несовершеннолетних\s+Да/);
+  assert.match(await page.locator('#detail').innerText(), /Возраст\s+От 16 лет/);
+  await page.getByText('Исходные условия роли в HRM', {exact: true}).click();
+  assert.match(await page.locator('#detail').innerText(), /НСВ — да/);
+  await page.locator('#close-detail').click();
+
+  const fresh = structuredClone(store);
+  for (const role of fresh.roles) role.conditions += '\nВозраст: от 16 лет';
+  publish([fresh, other]);
+  await page.locator('#refresh').click();
+  await page.getByText('Потребность обновлена', {exact: true}).waitFor();
+  await checkRoles();
+  await page.route(`${origin}/publication.json`, route => route.fulfill({status: 503}));
+  await page.reload();
+  await page.getByText(/Показана последняя сохранённая потребность/).waitFor();
+  await checkRoles();
+  await applyFilters(page, async () => {
+    await page.locator('#filters summary').click();
+    await page.locator('#minor').check();
+    await page.locator('#age').fill('17');
+  }, 1);
+  assert.deepEqual(await groupIds(page, '#results'), ['4744']);
+  await applyFilters(page, async () => {
+    await page.locator('#minor').uncheck();
+    await page.locator('#age').fill('18');
+  }, 2);
+  assert.deepEqual(await groupIds(page, '#results'), ['4743', '4744']);
+  assert.deepEqual(errors, []);
 });
