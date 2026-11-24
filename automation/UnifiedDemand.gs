@@ -180,6 +180,7 @@ function vvUpdateApi_(path, body) {
   var token = (PropertiesService.getScriptProperties().getProperty(VV_UPDATE.token) || '').trim();
   if (!/^github_pat_[A-Za-z0-9_-]+$/.test(token)) throw Error('Техническая настройка не завершена: отсутствует токен запуска обновления.');
   var options = {method: body ? 'post' : 'get', muteHttpExceptions: true, followRedirects: false,
+    escaping: false,
     headers: {Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10'}};
   if (body) { options.contentType = 'application/json'; options.payload = JSON.stringify(body); }
   var response;
