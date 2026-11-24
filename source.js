@@ -14,6 +14,15 @@ export function isOutdated(sourceDate, now = new Date()) {
   return dateKey(sourceDate) < dateKey(dayFormat.format(now));
 }
 
+export function sourceLabel(snapshot) {
+  if (snapshot?.sourceDateKind === 'accepted' && Number.isFinite(Date.parse(snapshot.acceptedAt))) {
+    const stamp = new Intl.DateTimeFormat('ru-RU', {timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit',
+      day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'}).format(new Date(snapshot.acceptedAt)).replace(', ', ' ');
+    return {label: 'Обновлено', value: stamp + ' МСК', title: 'Время принятия данных. Дата формирования выгрузки HRM не указана.'};
+  }
+  return {label: 'Потребность на', value: snapshot?.sourceDate ?? '—', title: ''};
+}
+
 export function assertFreshEnough(next, previous) {
   if (!previous) return;
   const source = dateKey(next.sourceDate).localeCompare(dateKey(previous.sourceDate));
@@ -40,6 +49,9 @@ function validRole(role, pointId) {
 export function validateSnapshot(snapshot) {
   if (!snapshot || snapshot.schema !== schemaVersion || !dateKey(snapshot.sourceDate)
     || !Number.isFinite(Date.parse(snapshot.publishedAt)) || !Array.isArray(snapshot.points)) throw new Error('Неверный формат опубликованной потребности.');
+  if (snapshot.sourceDateKind !== undefined && (snapshot.sourceDateKind !== 'accepted' ||
+      !Number.isFinite(Date.parse(snapshot.acceptedAt)) || dayFormat.format(new Date(snapshot.acceptedAt)) !== snapshot.sourceDate ||
+      Date.parse(snapshot.acceptedAt) > Date.parse(snapshot.publishedAt))) throw new Error('Некорректное время принятия данных.');
   const ids = new Set();
   for (const point of snapshot.points) {
     if (!point || !isText(point.id) || !/^\d+$/.test(point.id) || ids.has(point.id)

@@ -1,0 +1,65 @@
+name: Обновить потребность из рабочей таблицы
+run-name: VV update ${{ inputs.request_id || github.sha }}
+
+on:
+  pull_request:
+    paths: ['automation/**', 'scripts/**', 'test/**', '.github/workflows/update-demand.yml']
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: UUID запроса из рабочей таблицы
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm test
+      - run: npm run build
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pages: write
+    environment:
+      name: demand-package
+      deployment: false
+    concurrency:
+      group: vv-demand-production-update
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Опубликовать и сверить 24 файла
+        env:
+          VV_SHEETS_READER: ${{ secrets.VV_PREVIEW_SHEETS_READER }}
+          VV_PRODUCTION_AGENT_ID: ${{ secrets.VV_PRODUCTION_AGENT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/update-demand.mjs "${RUNNER_TEMP}/demand-update"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: demand-update-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/demand-update/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
