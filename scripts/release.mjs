@@ -65,6 +65,10 @@ export function assemble(handoff, pointRows, cityRows, index, previous, receipt,
   }
 
   const snapshot = generateDemand(toCsv(pointRows), now, handoff.id);
+  if (handoff.sourceDateKind === 'accepted') {
+    snapshot.sourceDateKind = 'accepted';
+    snapshot.acceptedAt = handoff.acceptedAt;
+  }
   if (!sameMetrics(metrics(snapshot.points), handoff.metrics)) throw Error('Публичная проекция изменила количество ролей, точек или итог недобора.');
   if (secretPattern.test(JSON.stringify(snapshot))) throw Error('В публичном снимке обнаружены контакты или секрет.');
 

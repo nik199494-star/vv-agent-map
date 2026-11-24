@@ -28,6 +28,14 @@ export async function demandPackageFixture() {
     ],
   };
   const files = new Map(await Promise.all(assets.map(async name => [name, await readFile(new URL('../' + name, import.meta.url))])));
+  // The fixture baseline must remain older than its input after real daily releases.
+  const baseline = {...JSON.parse(files.get('demand.json')), sourceDate: '18.11.2026', publishedAt: '2026-11-18T00:00:00.000Z', snapshotId: 'fixture-baseline'};
+  delete baseline.sourceDateKind;
+  delete baseline.acceptedAt;
+  files.set('demand.json', Buffer.from(JSON.stringify(baseline) + '\n'));
+  const receipt = {...JSON.parse(files.get('publication.json')), demand: sha256(files.get('demand.json'))};
+  files.set('publication.json', Buffer.from(JSON.stringify(receipt) + '\n'));
+  files.set('rollback.json', Buffer.from('{"schema":1,"active":false}\n'));
   return {
     request,
     input: {points, cities, passportGrid: [['Маркер', 'Паспорт'], [request.request_id, JSON.stringify(passport)]]},

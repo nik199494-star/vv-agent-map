@@ -1,5 +1,5 @@
 import {UNKNOWN, TRANSPORT, SCHEDULE, applyPointRules, findPoints, normalize, rank, tone, number, incomeText, ageText} from './model.js';
-import {isOutdated} from './source.js';
+import {isOutdated, sourceLabel} from './source.js';
 import {fetchRelease, selectRelease} from './rollback.js';
 import {readSnapshot, saveSnapshot} from './release-cache.js';
 import {attachLocations, findCityCenter, locationReasons} from './locations.js';
@@ -92,8 +92,11 @@ function renderTransport() {
 
 function updateSource() {
   const outdated = data.sourceDate && isOutdated(data.sourceDate);
+  const source = sourceLabel(data);
+  document.querySelectorAll('[data-source-label]').forEach(label => { label.textContent = source.label; });
   document.querySelectorAll('[data-hrm-date]').forEach(date => {
-    date.textContent = data.sourceDate ?? '—';
+    date.textContent = source.value;
+    date.title = source.title;
   });
   const notice = $('source-notice');
   const fallback = data.sourceDate ? `Показана последняя сохранённая потребность от ${data.sourceDate}.` : 'Потребность временно недоступна. Попробуйте позже.';
@@ -492,7 +495,8 @@ function displaySnapshot(release) {
   const snapshot = release?.snapshot;
   locations = release?.locations ?? emptyLocations;
   const points = attachLocations(applyPointRules(snapshot?.points ?? []), locations.coordinates);
-  data = {...defaultState, sourceDate: snapshot?.sourceDate ?? null, points, status: snapshot ? 'ready' : 'unavailable',
+  data = {...defaultState, sourceDate: snapshot?.sourceDate ?? null, sourceDateKind: snapshot?.sourceDateKind,
+    acceptedAt: snapshot?.acceptedAt, points, status: snapshot ? 'ready' : 'unavailable',
     priorities: [...new Set(points.flatMap(point => point.roles.map(role => role.priority)).filter(Boolean))],
     cities: [...new Set(points.map(point => point.city).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'))};
   cityZoomed = '';
@@ -730,4 +734,4 @@ const previousSnapshot = await readSnapshot().catch(() => null);
 if (previousSnapshot) displaySnapshot(previousSnapshot);
 setBusy(false);
 refreshData();
-document.addEventListener('visibilitychange', () => { if (!document.hidden) updateSource(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshData(); });

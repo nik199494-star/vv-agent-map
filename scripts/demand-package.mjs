@@ -9,6 +9,7 @@ import {attachLocations, locationReasons} from '../locations.js';
 import {PreviewInputError, readDispatchPassport, readPreviewInput} from './dispatch-preview.mjs';
 import {assemble, metrics, validateHandoff} from './release.mjs';
 import {sha256} from './projection.mjs';
+import {productionPassport, pendingAddressChanges} from './production-input.mjs';
 import {prepareRelease, readStoredBaseline, releaseClientFiles, savePagesBaseline, verifyPagesBaseline} from './pages-baseline.mjs';
 
 const integrationRef = 'refs/heads/codex/demand-package-test';
@@ -16,6 +17,7 @@ const marker = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 const moscowDay = new Intl.DateTimeFormat('ru-RU', {timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit'});
 const publishable = new Set(['demand.json', 'coordinates.json', 'publication.json']);
 const sources = {
+  production: 'Рабочая агентская витрина Google Sheets',
   sheets: 'Испытательная агентская витрина Google Sheets',
   replay: 'Сохранённое чтение испытательной агентской витрины',
   fixture: 'Тестовая фикстура с условными данными',
@@ -80,7 +82,7 @@ export function formatPackageReport(report) {
 ${report.status === 'READY_FOR_REVIEW' ? 'Проверен, ожидает решения владельца о выпуске.' : 'Испытательный пакет для проверки цепочки.'}
 
 - Источник — ${report.source}
-- Дата HRM — ${report.hrmDate}
+- ${report.sourceDateKind === 'accepted' ? 'Дата принятия данных (МСК)' : 'Дата HRM'} — ${report.hrmDate}
 - ID снимка — \`${report.snapshotId}\`
 - Клиент — ${client}
 - Файлы выпуска, отличающиеся от резерва — ${report.changedFiles.join(', ')}
@@ -115,7 +117,12 @@ export async function buildDemandPackage({request, input, mode, folder, fetcher,
     const previous = await readStoredBaseline(baseline, now.getTime());
     if (!previous.protectedClient) throw Error('Действующая карта должна поддерживать откат.');
     const {points, cities, passportGrid} = await phase('Не удалось прочитать зарегистрированную испытательную агентскую витрину.', input);
-    const passport = validateHandoff(readDispatchPassport(passportGrid, request.request_id, now));
+    let passport = mode === 'production' ? productionPassport(passportGrid, request.request_id, now) :
+      validateHandoff(readDispatchPassport(passportGrid, request.request_id, now));
+    if (mode === 'production') {
+      if (clientMode !== 'published') throw Error('Ежедневное обновление сохраняет действующий интерфейс.');
+      passport = {...passport, geo: pendingAddressChanges(points, JSON.parse(previous.files['coordinates.json']))};
+    }
     if (passport.id !== request.snapshot_id || passport.sourceDate !== request.hrm_date) {
       throw Error('ID снимка или дата HRM расходятся с указанными в запросе.');
     }
@@ -150,9 +157,10 @@ export async function buildDemandPackage({request, input, mode, folder, fetcher,
       if (clientFolder) await rm(clientFolder, {recursive: true, force: true});
       await Promise.all([rm(demandFile), rm(coordinatesFile)]);
       return {
-        status: mode === 'sheets' ? 'READY_FOR_REVIEW' : 'TEST_ONLY',
+        status: ['sheets', 'production'].includes(mode) ? 'READY_FOR_REVIEW' : 'TEST_ONLY',
         source: sources[mode], hrmDate: passport.sourceDate, snapshotId: passport.id,
         acceptedAt: passport.acceptedAt, requestId: request.request_id, totals: verified,
+        ...(passport.sourceDateKind ? {sourceDateKind: passport.sourceDateKind} : {}),
         client: {mode: clientMode, commit: clientFolder && /^[a-f0-9]{40}$/u.test(clientCommit ?? '') ? clientCommit : null,
           corrected4743Roles: clientFolder ? correctedRoles.length : null},
         changedFiles: Object.keys(release.manifest).filter(name => release.manifest[name] !== previous.manifest[name]),
