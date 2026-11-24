@@ -3,12 +3,13 @@ import {readFile, mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {runInNewContext} from 'node:vm';
+import {generateKeyPairSync} from 'node:crypto';
 import test from 'node:test';
 import {assets} from '../build.mjs';
 import {buildDemandPackage} from '../scripts/demand-package.mjs';
 import {demandPackageFixture} from '../scripts/demand-package-fixture.mjs';
-import {productionRequest, productionPassport, pendingAddressChanges} from '../scripts/production-input.mjs';
-import {publishDaily, waitForPublication, assertDailyFiles} from '../scripts/update-demand.mjs';
+import {productionRequest, productionPassport, pendingAddressChanges, productionRanges, readProductionInput} from '../scripts/production-input.mjs';
+import {publishDaily, waitForPublication, assertDailyFiles, updateDemand} from '../scripts/update-demand.mjs';
 import {project, sha256} from '../scripts/projection.mjs';
 import {sourceLabel, validateSnapshot} from '../source.js';
 
@@ -143,4 +144,59 @@ test('an uncertain dispatch is persisted before POST and is never blindly repeat
   c.vvUpdateAdvance_({}, state);
   assert.equal(posts, 1);
   assert.equal(state.runId, null);
+});
+
+test('a complete cloud update verifies the new public bytes, while a repeated run makes no second commit', async t => {
+  const f = await productionFixture();
+  const parent = await mkdtemp(join(tmpdir(), 'vv-cloud-update-'));
+  t.after(() => rm(parent, {recursive: true, force: true}));
+  const folder = join(parent, 'package');
+  const {privateKey} = generateKeyPairSync('rsa', {modulusLength: 2048});
+  const env = {GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: 'head',
+    VV_PRODUCTION_AGENT_ID: 'production_fixture_workbook_identifier',
+    VV_SHEETS_READER: JSON.stringify({client_email: 'test@example.invalid', private_key: privateKey.export({type: 'pkcs8', format: 'pem'})})};
+  const publicFiles = new Map();
+  for (const name of assets) publicFiles.set(name, Buffer.from(await (await f.fetcher(new URL(name, 'https://example.org/vv-agent-map/'))).arrayBuffer()));
+  const previousFiles = new Map(publicFiles);
+  let commits = 0, builds = 0;
+  const fetcher = async (url, options) => {
+    const target = new URL(url);
+    if (target.hostname === 'oauth2.googleapis.com') {
+      const claim = JSON.parse(Buffer.from(options.body.get('assertion').split('.')[1], 'base64url'));
+      assert.equal(claim.scope, 'https://www.googleapis.com/auth/spreadsheets.readonly');
+      return Response.json({access_token: 'fixture-token'});
+    }
+    if (target.hostname === 'sheets.googleapis.com') {
+      assert.ok(target.pathname.includes(env.VV_PRODUCTION_AGENT_ID));
+      assert.deepEqual(target.searchParams.getAll('ranges'), productionRanges);
+      return Response.json({valueRanges: [f.input.points, f.input.cities, f.input.passportGrid].map(values => ({values}))});
+    }
+    const name = target.pathname.replace(/^\/vv-agent-map\//u, '') || 'index.html';
+    return new Response(publicFiles.get(name), {status: publicFiles.has(name) ? 200 : 404});
+  };
+  const api = async (path, body) => {
+    if (path === 'git/ref/heads/main') return {object: {sha: 'head'}};
+    if (path === 'git/commits/head') return {tree: {sha: 'tree'}};
+    if (path.startsWith('git/trees/tree')) return {tree: assets.map(path => ({path, sha: path, type: 'blob', mode: '100644'}))};
+    if (path.startsWith('git/blobs/')) return {encoding: 'base64', content: previousFiles.get(path.slice(10)).toString('base64')};
+    if (path === 'git/blobs') return {sha: 'new-blob'};
+    if (path === 'git/trees') { assert.ok(body.tree.every(x => ['demand.json', 'coordinates.json', 'publication.json'].includes(x.path))); return {sha: 'new-tree'}; }
+    if (path === 'git/commits') { commits++; return {sha: 'new-head'}; }
+    if (path === 'git/refs/heads/main') { assert.equal(body.force, false); return {}; }
+    if (path === 'pages/builds') {
+      builds++;
+      for (const name of assets) publicFiles.set(name, await readFile(join(folder, 'release', name)));
+      return {status: 'queued'};
+    }
+    throw Error('Unexpected GitHub call: ' + path);
+  };
+  const event = {ref: 'main', inputs: {request_id: f.request.request_id}};
+  const result = await updateDemand({event, env, folder, fetcher, now: f.now, wait: async () => {}, api});
+  assert.equal(result.status, 'PUBLISHED');
+  assert.equal(result.snapshotId, f.passport.id);
+  assert.equal(commits, 1); assert.equal(builds, 1);
+  const repeated = await updateDemand({event, env, folder: join(parent, 'repeated'), fetcher, now: f.now, wait: async () => {}, api});
+  assert.equal(repeated.repeated, true);
+  assert.equal(commits, 1); assert.equal(builds, 1);
+  await assert.rejects(readProductionInput({}, fetcher), /закрытых настройках/);
 });
