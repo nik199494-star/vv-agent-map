@@ -162,9 +162,19 @@ function vvUpdateFreeze_(state, views) {
     if (sh.getMaxRows() < grid.length) sh.insertRowsAfter(sh.getMaxRows(), grid.length - sh.getMaxRows());
     if (sh.getMaxColumns() < width) sh.insertColumnsAfter(sh.getMaxColumns(), width - sh.getMaxColumns());
     sh.clearContents();
-    sh.getRange(1, 1, grid.length, width).setValues(grid.map(function (row) {
+    var range = sh.getRange(1, 1, grid.length, width);
+    // clearContents retains old currency/date formats when rows move between updates.
+    range.setNumberFormat('@');
+    range.setValues(grid.map(function (row) {
       return Array.from({length: width}, function (_, i) { var v = row[i] == null ? '' : String(row[i]); return /^[=+\-@]/.test(v) ? "'" + v : v; });
     }));
+    SpreadsheetApp.flush();
+    var actual = range.getDisplayValues();
+    var equal = grid.every(function (row, r) {
+      return Array.from({length: width}, function (_, i) { return row[i] == null ? '' : String(row[i]); })
+        .every(function (value, i) { return actual[r] && actual[r][i] === value; });
+    });
+    if (!equal) throw Error('Витрина публикации изменила формат значений. Выпуск остановлен до записи паспорта.');
     sh.hideSheet();
   };
   // Commit marker is written last; readers reject a partially replaced projection by digest.
@@ -229,6 +239,11 @@ function vvUpdateLocked_(start) {
     book = vvUpdateBook_(); state = vvUpdateReadState_();
     if (state && !state.done) return vvUpdateAdvance_(book, state);
     if (!start) {
+      // A failed cloud job may have been retried; check its existing ID without dispatching again.
+      if (state && state.runId && state.dispatchAttempted && !state.success) {
+        state.done = false; vvUpdateSave_(state); vvUpdateSchedule_();
+        return vvUpdateAdvance_(book, state);
+      }
       vvUpdateStopSchedule_();
       return vvUpdateStatus_(book, state || {stage: 'Готово', message: 'Обновление ещё не запускалось.'});
     }

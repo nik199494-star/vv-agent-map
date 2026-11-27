@@ -146,6 +146,55 @@ test('an uncertain dispatch is persisted before POST and is never blindly repeat
   assert.equal(state.runId, null);
 });
 
+test('frozen snapshots discard retained currency formats and verify display values before committing a passport', async () => {
+  for (const corrupt of [false, true]) {
+    const c = await appsScript(), f = await productionFixture();
+    const sheets = new Map(), writes = [];
+    const makeSheet = name => {
+      let format = 'currency', values;
+      const range = {
+        setNumberFormat(value) { format = value; return this; },
+        setValues(value) { assert.equal(format, '@'); values = value; writes.push(name); return this; },
+        getDisplayValues() {
+          const result = values.map(row => row.map(value => value.startsWith("'") ? value.slice(1) : value));
+          if (corrupt && name === 'Публикация точки') result[4][10] += 'руб.';
+          return result;
+        }
+      };
+      const sheet = {getMaxRows: () => 1000, getMaxColumns: () => 26, clearContents() {},
+        getRange: () => range, hideSheet() {}};
+      sheets.set(name, sheet); return sheet;
+    };
+    c.SpreadsheetApp = {openById: () => ({getSheetByName: name => sheets.get(name), insertSheet: makeSheet}), flush() {}};
+    c.vvUpdateBookId_ = () => 'fixture'; c.vvUpdateHash_ = sha256;
+    const state = {...f.passport, marker: f.request.request_id};
+    const views = {...f.input, projection: project(f.input.points, 'agent')};
+    if (corrupt) {
+      assert.throws(() => c.vvUpdateFreeze_(state, views), /до записи паспорта/);
+      assert.equal(writes.includes('Паспорт публикации'), false);
+    } else {
+      c.vvUpdateFreeze_(state, views);
+      assert.deepEqual(writes, ['Публикация точки', 'Публикация города', 'Паспорт публикации']);
+      assert.equal(state.digest, sha256(views.projection.signature));
+    }
+  }
+});
+
+test('manual status check reconciles a retried failed run without creating a new request', async () => {
+  const c = await appsScript();
+  const state = {marker: 'same-request', runId: 123, dispatchAttempted: true, done: true};
+  let schedules = 0, advances = 0;
+  c.LockService = {getScriptLock: () => ({tryLock: () => true, releaseLock() {}})};
+  c.vvUpdateBook_ = () => ({}); c.vvUpdateReadState_ = () => state;
+  c.vvUpdateSave_ = () => {}; c.vvUpdateSchedule_ = () => { schedules++; };
+  c.vvUpdateAdvance_ = (_, current) => {
+    assert.equal(current.marker, 'same-request'); assert.equal(current.runId, 123);
+    assert.equal(current.done, false); advances++; return current;
+  };
+  assert.equal(c.vvUpdateLocked_(false), state);
+  assert.equal(schedules, 1); assert.equal(advances, 1);
+});
+
 test('a complete cloud update verifies the new public bytes, while a repeated run makes no second commit', async t => {
   const f = await productionFixture();
   const parent = await mkdtemp(join(tmpdir(), 'vv-cloud-update-'));
